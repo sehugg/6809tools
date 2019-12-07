@@ -17,6 +17,10 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#ifdef EMSCRIPTEN
+#define NOLINKER
+#endif
+
 #include "TranslationUnit.h"
 
 #include "SwitchStmt.h"
@@ -1038,6 +1042,16 @@ Parameters::compileCFile(const string &inputFilename,
     if (verbose)
         cout << "Preprocessor command: " << cppCommand.str() << endl;
 
+#ifdef NOLINKER
+    yyin = fopen(inputFilename.c_str(), "r");
+    if (yyin == NULL)
+    {
+        int e = errno;
+        cout << PACKAGE << fatalErrorPrefix << "could not open C input file:"
+                                            << " " << strerror(e) << endl;
+        return EXIT_FAILURE;
+    }
+#else
     yyin = popen(cppCommand.str().c_str(), "r");
     if (yyin == NULL)
     {
@@ -1088,7 +1102,7 @@ Parameters::compileCFile(const string &inputFilename,
             return EXIT_SUCCESS;
         }
     }
-
+#endif
 
     TranslationUnitDestroyer tud(!monolithMode);  // destroy TU at end of this function, when in linker mode
 
@@ -1148,7 +1162,7 @@ Parameters::compileCFile(const string &inputFilename,
                 cout << "$" << hex << params.dataAddress << dec << " (" << params.dataAddress << ")";
             cout << "\n";
         }
-
+#ifndef NOLINKER
         int pipeCmdStatus = preprocFileCloser.close();
         if (!WIFEXITED(pipeCmdStatus))
         {
@@ -1160,7 +1174,7 @@ Parameters::compileCFile(const string &inputFilename,
             cout << PACKAGE << fatalErrorPrefix << "preprocessor failed." << endl;
             return EXIT_FAILURE;
         }
-
+#endif
         if (numErrors == 0)
         {
             tu.checkSemantics(params.monolithMode);  // this is when Scope objects get created in FunctionDefs
@@ -2098,7 +2112,9 @@ main(int argc, char *argv[])
     if (!params.monolithMode && params.compileOnly)
         return EXIT_SUCCESS;
 
-
+#ifdef NOLINKER
+    return EXIT_SUCCESS;
+#else
     // Link all modules together.
     //
     if (!params.monolithMode)
@@ -2121,4 +2137,5 @@ main(int argc, char *argv[])
     }
 
     return assembleInMonolithMode(targetPreprocId, programName, asmFilename, intermediateCompilationFiles);
+#endif
 }

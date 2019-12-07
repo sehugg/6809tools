@@ -10,7 +10,7 @@
 ifneq ($(DESTDIR),)
 INSTALLDIR = $(DESTDIR)/usr/bin
 else
-INSTALLDIR ?= /usr/local/bin
+INSTALLDIR ?= $(HOME)/bin
 endif
 
 # this are probably pointless but they will make sure
@@ -144,3 +144,12 @@ install: $(MAIN_TARGETS)
 test: all test/runtests
 	@test/runtests
 
+
+js/%.js: bin/%.bc
+	emcc -O2 --memory-init-file 0 \
+	-s MODULARIZE=1 \
+	-s EXPORT_NAME=\"'$*'\" \
+	-s 'EXTRA_EXPORTED_RUNTIME_METHODS=["FS"]' \
+	-s FORCE_FILESYSTEM=1 \
+	bin/$*.bc -o $@ $(ARGS_$*)
+                

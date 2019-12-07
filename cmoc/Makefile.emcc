@@ -1,0 +1,10 @@
+
+all: js/cmoc.js
+
+js/%.js: bin/%.bc
+	emcc -O2 --memory-init-file 0 \
+	-s MODULARIZE=1 \
+	-s EXPORT_NAME=\"'$*'\" \
+	-s 'EXTRA_EXPORTED_RUNTIME_METHODS=["FS"]' \
+	-s FORCE_FILESYSTEM=1 \
+	bin/$*.bc -o $@ $(ARGS_$*)
