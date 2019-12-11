@@ -13,7 +13,7 @@
 #include <unistd.h>
 #endif
 
-#if defined(__CYGWIN__)
+#if defined(__CYGWIN__) || defined(EMSCRIPTEN)
 #include <sys/select.h>
 #endif
 

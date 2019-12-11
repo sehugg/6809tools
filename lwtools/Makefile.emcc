@@ -1,8 +1,9 @@
 
 all:
 	mkdir -p bin js
-	cp src/cmoc bin/cmoc.bc
-	make -f Makefile.emcc js/cmoc.js
+	cp lwasm/lwasm bin/lwasm.bc
+	cp lwlink/lwlink bin/lwlink.bc
+	make -f Makefile.emcc js/lwasm.js js/lwlink.js
 
 js/%.js: bin/%.bc
 	emcc -O2 --memory-init-file 0 \
