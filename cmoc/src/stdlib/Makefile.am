@@ -1,4 +1,4 @@
-# $Id: Makefile.am,v 1.40 2019/06/29 04:26:11 sarrazip Exp $
+# $Id: Makefile.am,v 1.45 2020/06/06 04:41:44 sarrazip Exp $
 
 # N.B.: CMOC must already have been compiled before this directory can be processed.
 
@@ -6,8 +6,7 @@
 #          while references to code must be specified with uppercase ",PCR".
 #          This is for the benefit of OS-9, where ",pcr" gets converted to ",Y".
 
-# The linker mode header files go in /usr/share/cmoc/include,
-# while the legacy monolith mode header files go in /usr/share/cmoc.
+# The eader files go in /usr/share/cmoc/include.
 #
 cmocincdir = $(pkgdatadir)/include
 cmocinc_HEADERS = \
@@ -138,6 +137,8 @@ STD_ASM = \
 	dwtoa.asm \
 	LINBUF.asm \
 	memcmp.asm \
+	memicmp.asm \
+	memcmpimpl.asm \
 	memcpy.asm \
 	memset.asm \
 	printf.asm \
@@ -152,7 +153,10 @@ STD_ASM = \
 	sprintf.asm \
 	strcat.asm \
 	strchr.asm \
+	strstr.asm \
 	strcmp.asm \
+	stricmp.asm \
+	strcmpimpl.asm \
 	strcpy.asm \
 	strlen.asm \
 	strlwr.asm \
@@ -161,7 +165,8 @@ STD_ASM = \
 	strupr.asm \
 	tolower.asm \
 	toupper.asm \
-	zerodw.asm
+	zerodw.asm \
+	convertABToUpperCase.asm
 
 # Also part of 'std' library:
 C_COMMON = \
@@ -281,6 +286,17 @@ CMOC_LIB_FLAGS = -O2 -DNDEBUG -nostdinc -I $(srcdir)
 	../cmoc -c $(CMOC_LIB_FLAGS) --vectrex -DSTD_INC_PATH='$(srcdir)/std.inc' -o $@ $<
 .c.dgn_o:
 	../cmoc -c $(CMOC_LIB_FLAGS) --dragon -o $@ $<
+
+# Checks if some files contain non-breakable spaces (character 160).
+# The statement in the 'continue' clause resets the line counter ($.)
+# at the end of each processed file.
+#
+check:
+	$(PERL) -e 'while (<>) { if (/\xA0/) { print "ERROR: non-breakable space at $$ARGV:$$.\n"; exit 1 } } continue { close ARGV if eof }' \
+		$(cmocinc_HEADERS) $(vectrexinc_HEADERS) \
+		$(CRT_ASM) $(STD_ASM) \
+		$(C_COMMON) $(C_COCO_OR_DRAGON_BASIC) $(C_COCO_BASIC) $(C_VECTREX) \
+		Makefile.am
 
 CLEANFILES = $(cmoclib_DATA) \
         $(CRT_ECB_OBJ) $(CRT_USIM_OBJ) $(CRT_OS9_OBJ) $(CRT_VECTREX_OBJ) $(CRT_DRAGON_OBJ) \

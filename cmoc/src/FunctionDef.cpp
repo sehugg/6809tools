@@ -1,4 +1,4 @@
-/*  $Id: FunctionDef.cpp,v 1.62 2019/08/16 02:32:44 sarrazip Exp $
+/*  $Id: FunctionDef.cpp,v 1.63 2020/04/04 17:41:44 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -477,7 +477,7 @@ FunctionDef::checkSemantics(Functor &f)
         When the global Scope will be destroyed, delete will be called on 'scope'.
     */
     assert(getScope() == NULL);
-    setScope(new Scope(&TranslationUnit::instance().getGlobalScope()));
+    setScope(new Scope(&TranslationUnit::instance().getGlobalScope(), getLineNo()));
     //cerr << "FunctionDef's top scope at " << scope << "\n";
     assert(getScope()->getParent() == &TranslationUnit::instance().getGlobalScope());
 

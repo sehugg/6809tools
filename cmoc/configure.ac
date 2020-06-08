@@ -1,8 +1,8 @@
-# $Id: configure.ac,v 1.125 2019/10/21 23:23:47 sarrazip Exp $
+# $Id: configure.ac,v 1.132 2020/06/07 14:53:53 sarrazip Exp $
 
 AC_PREREQ(2.54)
 
-AC_INIT(cmoc, 0.1.61)
+AC_INIT(cmoc, 0.1.67)
 AC_CONFIG_SRCDIR(src/lexer.ll)
 AM_INIT_AUTOMAKE
 
@@ -13,7 +13,7 @@ AC_SUBST(PACKAGE_FULL_NAME)
 AC_SUBST(PACKAGE_SUMMARY_EN)
 AC_SUBST(PACKAGE_SUMMARY_FR)
 
-MANUAL_DATE_EN="October 21st, 2019"; AC_SUBST(MANUAL_DATE_EN)
+MANUAL_DATE_EN="June 7th, 2020"; AC_SUBST(MANUAL_DATE_EN)
 
 AC_PROG_CXX
 AC_LANG_CPLUSPLUS
@@ -131,7 +131,6 @@ AM_CONDITIONAL(BUILD_WRITECOCOFILE, [test "$build_writecocofile" = yes])
 AC_CONFIG_FILES([
 	Makefile
 	src/Makefile
-	src/support/Makefile
 	src/stdlib/Makefile
 	src/float/Makefile
 	src/usim-0.91-cmoc/Makefile

@@ -1,4 +1,4 @@
-/*  $Id: TranslationUnit.cpp,v 1.153 2019/10/19 03:26:48 sarrazip Exp $
+/*  $Id: TranslationUnit.cpp,v 1.166 2020/05/07 01:12:36 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
@@ -34,6 +34,7 @@
 #include "VariableExpr.h"
 #include "SwitchStmt.h"
 #include "LabeledStmt.h"
+#include "ExpressionTypeSetter.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -52,6 +53,7 @@ TranslationUnit::createInstance(TargetPlatform targetPlatform,
                                 bool warnPassingConstForFuncPtr,
                                 bool isConstIncorrectWarningEnabled,
                                 bool isBinaryOpGivingByteWarningEnabled,
+                                bool isLocalVariableHidingAnotherWarningEnabled,
                                 bool relocatabilitySupported)
 {
     assert(theInstance == NULL);
@@ -61,6 +63,7 @@ TranslationUnit::createInstance(TargetPlatform targetPlatform,
                         warnPassingConstForFuncPtr,
                         isConstIncorrectWarningEnabled,
                         isBinaryOpGivingByteWarningEnabled,
+                        isLocalVariableHidingAnotherWarningEnabled,
                         relocatabilitySupported);
     assert(theInstance);
 }
@@ -81,6 +84,7 @@ TranslationUnit::TranslationUnit(TargetPlatform _targetPlatform,
                                  bool _warnPassingConstForFuncPtr,
                                  bool _isConstIncorrectWarningEnabled,
                                  bool _isBinaryOpGivingByteWarningEnabled,
+                                 bool _isLocalVariableHidingAnotherWarningEnabled,
                                  bool _relocatabilitySupported)
   : typeManager(),
     globalScope(NULL),
@@ -109,6 +113,7 @@ TranslationUnit::TranslationUnit(TargetPlatform _targetPlatform,
     warnedAboutUnsupportedFloats(false),
     isConstIncorrectWarningEnabled(_isConstIncorrectWarningEnabled),
     isBinaryOpGivingByteWarningEnabled(_isBinaryOpGivingByteWarningEnabled),
+    isLocalVariableHidingAnotherWarningEnabled(_isLocalVariableHidingAnotherWarningEnabled),
     warnedAboutVolatile(false),
     neededUtilitySubRoutines(),
     targetPlatform(_targetPlatform),
@@ -123,7 +128,7 @@ TranslationUnit::TranslationUnit(TargetPlatform _targetPlatform,
 {
     theInstance = this;  // instance() needed by Scope constructor
     typeManager.createBasicTypes();
-    globalScope = new Scope(NULL);  // requires 'void', i.e., must come after createBasicTypes()
+    globalScope = new Scope(NULL, string());  // requires 'void', i.e., must come after createBasicTypes()
     typeManager.createInternalStructs(*globalScope, targetPlatform);  // global scope must be created; receives internal structs
 
     //typeManager.dumpTypes(cout); // dumps all predefined types in C notation
@@ -251,11 +256,10 @@ TranslationUnit::registerFunctionCall(const string &callerId, const string &call
 class FunctionChecker : public Tree::Functor
 {
 public:
-    FunctionChecker(TranslationUnit &tu, bool _isCallToUndefinedFunctionAllowed, bool _monolithMode)
+    FunctionChecker(TranslationUnit &tu, bool _isCallToUndefinedFunctionAllowed)
     :   translationUnit(tu),
         declaredFunctions(), undefinedFunctions(), definedFunctions(), calledFunctions(),
-        isCallToUndefinedFunctionAllowed(_isCallToUndefinedFunctionAllowed),
-        monolithMode(_monolithMode)
+        isCallToUndefinedFunctionAllowed(_isCallToUndefinedFunctionAllowed)
     {
     }
     virtual bool open(Tree *t)
@@ -266,7 +270,6 @@ public:
         }
         else if (FunctionCallExpr *fc = dynamic_cast<FunctionCallExpr *>(t))
         {
-            fc->setMonolithMode(monolithMode);
             if (!fc->isCallThroughPointer())
             {
                 string funcId = fc->getIdentifier();
@@ -288,23 +291,9 @@ public:
         {
             const string& funcId = it->first;
 
-            // If the undefined function is not provided by the compiler,
-            // and it is called by the program, then report it as undefined,
-            // unless we are in linker mode (non monolith), then import the
-            // function name (so that another module can provide the function body).
+            // Import the function name (so that another module can provide the function body).
             //
-            if (monolithMode)
-            {
-                if (! translationUnit.isStandardFunction(funcId)
-                    && calledFunctions.find(funcId) != calledFunctions.end())
-                {
-                    if (isCallToUndefinedFunctionAllowed)
-                        translationUnit.registerNeededUtility("_" + funcId);
-                    else
-                        it->second->errormsg("function %s() declared and called but not defined", funcId.c_str());
-                }
-            }
-            else if (calledFunctions.find(funcId) != calledFunctions.end())
+            if (calledFunctions.find(funcId) != calledFunctions.end())
                 translationUnit.registerNeededUtility("_" + funcId);
         }
     }
@@ -334,7 +323,6 @@ private:
     set<string> definedFunctions;
     set<string> calledFunctions;
     bool isCallToUndefinedFunctionAllowed;
-    bool monolithMode;
 };
 
 
@@ -489,8 +477,42 @@ public:
     DeclarationFinisher() {}
     virtual bool open(Tree *t)
     {
+        DeclarationSequence *declSeq = dynamic_cast<DeclarationSequence *>(t);
+        if (declSeq)
+        {
+            // Set the type of the expression used by enumerators, if any, e.g., enum { A = sizeof(v) }.
+            //
+            std::vector<Enumerator *> *enumeratorList = declSeq->getEnumeratorList();
+            if (enumeratorList)  // if enum { ... }, with or without declarators
+            {
+                for (size_t i = 0; i < enumeratorList->size(); ++i)  // for each name in enum { ... }
+                {
+                    const Enumerator &enumerator = *(*enumeratorList)[i]; // e.g., A = 42 or B = sizeof(v)
+                    Tree *valueExpr = enumerator.valueExpr;  // e.g., 42 or sizeof(v) or null if no expr
+                    if (valueExpr)
+                    {
+                        ExpressionTypeSetter ets;
+                        valueExpr->iterate(ets);
+
+                        // valueExpr->getType() will still be VOID_TYPE here in the case where
+                        // valueExpr contains undefined enumerated names, e.g.,
+                        // enum { B = A + 1 }, with A undefined. Since we know it is an
+                        // enumerated name, we use int as a fallback.
+                        //
+                        if (valueExpr->getType() == VOID_TYPE)
+                            valueExpr->setTypeDesc(TranslationUnit::getTypeManager().getIntType(WORD_TYPE, true));
+                    }
+                }
+            }
+            return true;
+        }
+
         Declaration *decl = dynamic_cast<Declaration *>(t);
-        if (!decl || !decl->needsFinish)
+        if (!decl)
+            return true;
+        /*cout << "# DeclarationFinisher: decl " << decl << ": '" << decl->getVariableId()
+             << "', isGlobal=" << decl->isGlobal() << ", needsFinish=" << decl->needsFinish << ", line " << decl->getLineNo() << endl;*/
+        if (!decl->needsFinish)
             return true;
 
         const TypeDesc *varTypeDesc = decl->getTypeDesc();
@@ -503,8 +525,7 @@ public:
         // We start arrayDimensions with the 5, because the type of v is as if v had been
         // declared as char v[5][10].
 
-        /*cout << "# DeclarationFinisher: decl " << decl << ": line " << decl->getLineNo()
-             << ", arraySizeExprList=[" << decl->arraySizeExprList << "]"
+        /*cout << "# DeclarationFinisher:   arraySizeExprList=[" << vectorToString(decl->arraySizeExprList) << "]"
              << ", varTypeDesc=" << varTypeDesc << " '" << varTypeDesc->toString() << "'\n";*/
         if (decl->arraySizeExprList.size() > 0)
         {
@@ -545,6 +566,12 @@ public:
 
         /*cout << "# DeclarationFinisher:   final arrayDimensions=" << vectorToString(arrayDimensions) << ", finalTypeDesc="
              << finalTypeDesc << " '" << finalTypeDesc->toString() << "'\n";*/
+
+        if (decl->isGlobal())
+        {
+            TranslationUnit::instance().declareGlobal(decl);
+        }
+
         return true;
     }
 private:
@@ -553,38 +580,116 @@ private:
 };
 
 
-// This is the method where global variables get declared, with a call to Scope::declareVariable().
+// Call setGlobal(true) on each Declaration at the global scope.
 //
 void
-TranslationUnit::checkSemantics(bool monolithMode)
+TranslationUnit::markGlobalDeclarations()
 {
-    if (!definitionList)
-        return;
-
-    // Set the TypeDesc of all enumerated names.
-    //
-    getTypeManager().setEnumeratorTypes();
-
-
-    // Finish Declaration objects that have been created by Declarator::declareVariable()
-    // but that could not be initialized completely because that method is called
-    // during parsing.
-    // TypeManager::setEnumeratorTypes() must have been called.
+    assert(scopeStack.size() == 0);  // ensure current scope is global one
+    for (vector<Tree *>::iterator it = definitionList->begin();
+                                 it != definitionList->end(); it++)
     {
-        DeclarationFinisher df;
-        definitionList->iterate(df);
+        DeclarationSequence *declSeq = dynamic_cast<DeclarationSequence *>(*it);
+        if (!declSeq)
+            continue;
+
+        for (std::vector<Tree *>::iterator jt = declSeq->begin(); jt != declSeq->end(); ++jt)
+        {
+            if (Declaration *decl = dynamic_cast<Declaration *>(*jt))
+            {
+                decl->setGlobal(true);
+            }
+        }
     }
+}
 
-    vector<const Declaration *> constDataDeclarationsToCheck;
-    constDataDeclarationsToCheck.reserve(32);
 
-    /*  Declare all functions and global variables before
-        interpreting any code.
+void
+TranslationUnit::setTypeDescOfGlobalDeclarationClasses()
+{
+    assert(scopeStack.size() == 0);  // ensure current scope is global one
+    for (vector<Tree *>::iterator it = definitionList->begin();
+                                 it != definitionList->end(); it++)
+    {
+        DeclarationSequence *declSeq = dynamic_cast<DeclarationSequence *>(*it);
+        if (!declSeq)
+            continue;
+        if (declSeq->getType() != CLASS_TYPE)
+            continue;
 
-        Global variables are stored in globalVariables in the order in which
+        const string &className = declSeq->getTypeDesc()->className;
+        assert(!className.empty());
+        ClassDef *cl = getClassDef(className);
+        if (cl)  // cl will be null in case like: struct T *f(); where struct T is left undefined
+            cl->setTypeDesc(declSeq->getTypeDesc());
+    }
+}
+
+
+void
+TranslationUnit::declareGlobal(Declaration *decl)
+{
+    assert(decl);
+    assert(decl->isGlobal());
+    if (!decl->isExtern)
+        globalVariables.push_back(decl);
+
+    /*cout << "# TranslationUnit::declareGlobal: globalScope->declareVariable() for "
+            << decl->getVariableId() << endl;*/
+    if (!globalScope->declareVariable(decl))
+    {
+        const Declaration *existingDecl = globalScope->getVariableDeclaration(decl->getVariableId(), false);
+        assert(existingDecl);
+        if (!decl->isExtern && !existingDecl->isExtern)
+            decl->errormsg("global variable `%s' already declared at global scope at %s",
+                        decl->getVariableId().c_str(), existingDecl->getLineNo().c_str());
+        else if (decl->getTypeDesc() != existingDecl->getTypeDesc())
+            decl->errormsg("global variable `%s' declared with type `%s' at `%s' but with type `%s' at `%s'",
+                        decl->getVariableId().c_str(),
+                        decl->getTypeDesc()->toString().c_str(),
+                        decl->getLineNo().c_str(),
+                        existingDecl->getTypeDesc()->toString().c_str(),
+                        existingDecl->getLineNo().c_str());
+    }
+}
+
+
+void
+TranslationUnit::setGlobalDeclarationLabels()
+{
+    /*  Global variables are stored in globalVariables in the order in which
         they are declared. This is necessary to emit correct initializers.
         Example: int a = 42; int b = a;
     */
+    assert(scopeStack.size() == 0);  // ensure current scope is global one
+    for (vector<Tree *>::iterator it = definitionList->begin();
+                                 it != definitionList->end(); it++)
+    {
+        DeclarationSequence *declSeq = dynamic_cast<DeclarationSequence *>(*it);
+        if (!declSeq)
+            continue;
+
+        for (std::vector<Tree *>::iterator jt = declSeq->begin(); jt != declSeq->end(); ++jt)
+        {
+            if (Declaration *decl = dynamic_cast<Declaration *>(*jt))
+            {
+                // Set the assembly label on this global variable.
+                uint16_t size = 0;
+                if (decl->needsFinish)
+                    ;  // error message already issued
+                else if (!decl->isExtern && !decl->getVariableSizeInBytes(size))
+                    decl->errormsg("invalid dimensions for array `%s'", decl->getVariableId().c_str());
+                else
+                    decl->setLabelFromVariableId();
+            }
+        }
+    }
+}
+
+
+void
+TranslationUnit::declareFunctions()
+{
     assert(scopeStack.size() == 0);  // ensure current scope is global one
     for (vector<Tree *>::iterator it = definitionList->begin();
                                  it != definitionList->end(); it++)
@@ -605,49 +710,44 @@ TranslationUnit::checkSemantics(bool monolithMode)
         {
             for (std::vector<Tree *>::iterator jt = declSeq->begin(); jt != declSeq->end(); ++jt)
             {
-                if (Declaration *decl = dynamic_cast<Declaration *>(*jt))
-                {
-                    if (!decl->isExtern)
-                        globalVariables.push_back(decl);
-
-                    if (!globalScope->declareVariable(decl))
-                    {
-                        const Declaration *existingDecl = globalScope->getVariableDeclaration(decl->getVariableId(), false);
-                        assert(existingDecl);
-                        if (!decl->isExtern && !existingDecl->isExtern)
-                            decl->errormsg("global variable `%s' already declared at global scope at %s",
-                                       decl->getVariableId().c_str(), existingDecl->getLineNo().c_str());
-                        else if (decl->getTypeDesc() != existingDecl->getTypeDesc())
-                            decl->errormsg("global variable `%s' declared with type `%s' at `%s' but with type `%s' at `%s'",
-                                       decl->getVariableId().c_str(),
-                                       decl->getTypeDesc()->toString().c_str(),
-                                       decl->getLineNo().c_str(),
-                                       existingDecl->getTypeDesc()->toString().c_str(),
-                                       existingDecl->getLineNo().c_str());
-                    }
-
-                    decl->setGlobal(true);
-
-                    // Set the assembly label on this global variable.
-                    uint16_t size = 0;
-                    if (decl->needsFinish)
-                        ;  // error message already issued
-                    else if (!decl->isExtern && !decl->getVariableSizeInBytes(size))
-                        decl->errormsg("invalid dimensions for array `%s'", decl->getVariableId().c_str());
-                    else
-                        decl->setLabelFromVariableId();
-                }
-                else if (FunctionDef *fd = dynamic_cast<FunctionDef *>(*jt))
+                if (FunctionDef *fd = dynamic_cast<FunctionDef *>(*jt))
                 {
                     assert(fd->getBody() == NULL);  // only prototype expected here, not function definition
                     registerFunction(fd);
                 }
-                else
-                    assert(false);
             }
-            continue;
         }
     }
+}
+
+
+// This is the method where global variables get declared, with a call to Scope::declareVariable().
+//
+void
+TranslationUnit::checkSemantics()
+{
+    if (!definitionList)
+        return;
+
+    markGlobalDeclarations();
+
+    setTypeDescOfGlobalDeclarationClasses();
+
+    // Finish Declaration objects that have been created by Declarator::declareVariable()
+    // but that could not be initialized completely because that method is called
+    // during parsing.
+    // Also set the type of the expression used by enumerators, if any, e.g., enum { A = sizeof(v) }.
+    {
+        DeclarationFinisher df;
+        definitionList->iterate(df);
+    }
+
+    vector<const Declaration *> constDataDeclarationsToCheck;
+    constDataDeclarationsToCheck.reserve(32);
+
+    setGlobalDeclarationLabels();
+
+    declareFunctions();
 
 
     // Check that all members of structs and unions are of a defined type,
@@ -708,7 +808,7 @@ TranslationUnit::checkSemantics(bool monolithMode)
     // over the function bodies, so that function calls that use a function pointer
     // can be differentiated from standard calls.
     //
-    FunctionChecker ufc(*this, callToUndefinedFunctionAllowed, monolithMode);
+    FunctionChecker ufc(*this, callToUndefinedFunctionAllowed);
     definitionList->iterate(ufc);
     ufc.reportErrors();
 
@@ -843,14 +943,9 @@ TranslationUnit::allocateLocalVariables()
 
 // setTargetPlatform() must have been called before calling this method.
 // Stops short if an error is detected.
-// emitUncalledFunctions: Emits a function even if it is never called by C code.
-// monolithMode: If true, emits for a single assembly pass. If false, emits for linking with lwlink.
 //
 void
-TranslationUnit::emitAssembler(ASMText &out, const string & /*programName*/, bool compileOnly,
-                               uint16_t codeAddress, uint16_t dataAddress, uint16_t stackSpace,
-                               bool emitBootLoaderMarker, bool emitUncalledFunctions,
-                               bool monolithMode)
+TranslationUnit::emitAssembler(ASMText &out, uint16_t dataAddress, uint16_t stackSpace, bool emitBootLoaderMarker)
 {
     detectCalledFunctions();
 
@@ -860,46 +955,16 @@ TranslationUnit::emitAssembler(ASMText &out, const string & /*programName*/, boo
     //
     map<string, FunctionDef *>::iterator kt = functionDefs.find("main");
     const FunctionDef *mainFunctionDef = (kt == functionDefs.end() ? NULL : kt->second);
-    if (mainFunctionDef == NULL && monolithMode)
-    {
-        errormsg("main() undefined");
-        return;
-    }
 
-    // Start the section that goes at the beginning of the binary, if in non-linker mode
-    // or if we have a main() function to generate.
+    // Start the section that goes at the beginning of the binary if we have a main() function to generate.
     //
-    bool needStartSection = (!monolithMode && mainFunctionDef != NULL);
+    bool needStartSection = (mainFunctionDef != NULL);
     if (needStartSection)
     {
         out.startSection("start");
     }
 
-    const bool os9MonolithMode = (monolithMode && targetPlatform == OS9);
-
-    if (monolithMode)
-    {
-        if (targetPlatform == VECTREX)
-        {
-            out.emitComment("VECTREX");
-            out.ins("ORG", "0");
-            out.ins("FCC", "'g GCE " + vxCopyright + "'");
-            out.ins("FCB", "$80");
-            out.ins("FDB", vxMusic);
-            out.ins("FCB", int8ToString(vxTitleSizeHeight, true));
-            out.ins("FCB", int8ToString(vxTitleSizeWidth, true));
-            out.ins("FCB", int8ToString(vxTitlePosY, true));
-            out.ins("FCB", int8ToString(vxTitlePosX, true));
-            out.ins("FCC", "'" + vxTitle + "'");
-            out.ins("FCB", "$80");
-            out.ins("FCB", "0");
-        }
-        else
-        {
-            out.ins("ORG", wordToString(codeAddress, true), "Code section");
-        }
-    }
-    else if (targetPlatform == VECTREX && needStartSection)  // linker mode
+    if (targetPlatform == VECTREX && needStartSection)
     {
         out.emitComment("Vectrex header, positioned at address 0.");
 
@@ -919,7 +984,7 @@ TranslationUnit::emitAssembler(ASMText &out, const string & /*programName*/, boo
 
     // If we are generating main(), also generate the program_start routine that calls main().
     //
-    if (monolithMode || mainFunctionDef != NULL)
+    if (mainFunctionDef != NULL)
     {
         out.emitExport("program_start");
         assert(mainFunctionDef);
@@ -932,7 +997,7 @@ TranslationUnit::emitAssembler(ASMText &out, const string & /*programName*/, boo
             out.ins("FCC", "\"OS\"", "marker for CoCo DECB DOS command");
     }
 
-    if ((monolithMode && !compileOnly) || (!monolithMode && mainFunctionDef != NULL))
+    if (false || mainFunctionDef != NULL)
     {
         // Start the program by initializing the global variables, then
         // jumping to the main() function's label.
@@ -999,9 +1064,15 @@ TranslationUnit::emitAssembler(ASMText &out, const string & /*programName*/, boo
                     if (const Declaration *decl = dynamic_cast<Declaration *>(*jt))
                     {
                         if (decl->isExtern)
+                        {
+                            assert(!decl->getLabel().empty());
                             out.emitImport(decl->getLabel().c_str());
+                        }
                         else if (!decl->isStatic)
+                        {
+                            assert(!decl->getLabel().empty());
                             out.emitExport(decl->getLabel().c_str());
+                        }
                     }
                 }
             }
@@ -1009,10 +1080,7 @@ TranslationUnit::emitAssembler(ASMText &out, const string & /*programName*/, boo
 
     // Generate code for each function that is called at least once
     // or has its address taken at least once (see calls to FunctionDef::setCalled()).
-    // Generate unconditionally in linker mode (!monolithMode).
 
-    if (monolithMode)
-        out.emitLabel("functions_start");  // labels to allow measuring user code size
     set<string> emittedFunctions;
     for (kt = functionDefs.begin(); kt != functionDefs.end(); kt++)
     {
@@ -1025,11 +1093,7 @@ TranslationUnit::emitAssembler(ASMText &out, const string & /*programName*/, boo
             continue;
         }
 
-        bool emit = false;
-        if (monolithMode)
-            emit = (emitUncalledFunctions || fd->isCalled());
-        else
-            emit = fd->isCalled() || !fd->hasInternalLinkage();
+        bool emit = fd->isCalled() || !fd->hasInternalLinkage();
 
         if (emit)
         {
@@ -1052,28 +1116,22 @@ TranslationUnit::emitAssembler(ASMText &out, const string & /*programName*/, boo
             if (!fd->hasInternalLinkage())
                 out.emitExport(fd->getLabel());
             if (!fd->emitCode(out, false))
-                errormsg("failed to emit code for function %s()", fd->getId().c_str());
+                errormsg("failed to emit code for function %s() in 2nd pass", fd->getId().c_str());
             emittedFunctions.insert(fd->getId());  // remember that this func has been emitted
         }
     }
 
-    if (!monolithMode)
+    // Issue a warning for uncalled static functions.
+    for (kt = functionDefs.begin(); kt != functionDefs.end(); kt++)
     {
-        // Issue a warning for uncalled static functions.
-        for (kt = functionDefs.begin(); kt != functionDefs.end(); kt++)
-        {
-            const FunctionDef *fd = kt->second;
-            if (fd->getBody() && !fd->isCalled() && fd->hasInternalLinkage())
-                fd->warnmsg("static function %s() is not called", fd->getId().c_str());
-        }
+        const FunctionDef *fd = kt->second;
+        if (fd->getBody() && !fd->isCalled() && fd->hasInternalLinkage())
+            fd->warnmsg("static function %s() is not called", fd->getId().c_str());
     }
-
-    if (monolithMode)
-        out.emitLabel("functions_end");
 
     out.endSection();
 
-    if (monolithMode || mainFunctionDef != NULL)
+    if (mainFunctionDef != NULL)
     {
         out.startSection("initgl_start");
 
@@ -1085,11 +1143,8 @@ TranslationUnit::emitAssembler(ASMText &out, const string & /*programName*/, boo
         if (isProgramExecutableOnlyOnce)
             emitProgramEnd(out);
 
-        if (!monolithMode)
-        {
-            out.emitExport("INITGL");  // called by INILIB
-            out.emitLabel("INITGL");
-        }
+        out.emitExport("INITGL");  // called by INILIB
+        out.emitLabel("INITGL");
 
         out.endSection();
     }
@@ -1101,11 +1156,6 @@ TranslationUnit::emitAssembler(ASMText &out, const string & /*programName*/, boo
 
         out.emitSeparatorComment();
         out.emitComment("Initialize global variables.");
-        if (monolithMode)
-        {
-            out.emitExport("INITGL");
-            out.emitLabel("INITGL");
-        }
         assert(scopeStack.size() == 0);  // ensure current scope is global one
         for (vector<Declaration *>::iterator jt = globalVariables.begin();
                                             jt != globalVariables.end(); jt++)
@@ -1118,8 +1168,6 @@ TranslationUnit::emitAssembler(ASMText &out, const string & /*programName*/, boo
                     errormsg("failed to emit code for declaration of %s", decl->getVariableId().c_str());
             }
         }
-        if (monolithMode)
-            out.ins("RTS", "", "end of global variable initialization");
 
         out.endSection();
     }
@@ -1188,33 +1236,17 @@ TranslationUnit::emitAssembler(ASMText &out, const string & /*programName*/, boo
 
     out.endSection();
 
-    if (!os9MonolithMode)
+    // If no data section, then emit the writable globals after the code.
+    // In this case, nothing other than INITGL should come after
+    // the 'program_end' label, because sbrk() uses the memory
+    // that starts at that label.
+    //
+    if (dataAddress == 0xFFFF)
     {
-        // If no data section, then emit the writable globals after the code.
-        // In this case, nothing other than INITGL should come after
-        // the 'program_end' label, because sbrk() uses the memory
-        // that starts at that label.
-        //
-        if (dataAddress == 0xFFFF)
-        {
-            emitWritableGlobals(out, monolithMode);
-        }
+        emitWritableGlobals(out);
     }
 
-    out.startSection("code");
-
-    // Include standard library functions.
-    // Must contain only code, no data.
-
-    if (monolithMode)
-    {
-        out.emitSeparatorComment();
-        out.emitInclude("stdlib.inc");
-    }
-
-    out.endSection();
-
-    if (monolithMode || mainFunctionDef != NULL)
+    if (mainFunctionDef != NULL)
     {
         out.startSection("initgl_end");
 
@@ -1228,36 +1260,26 @@ TranslationUnit::emitAssembler(ASMText &out, const string & /*programName*/, boo
 
     // Here, we are not in any section.
 
-    if (!os9MonolithMode && dataAddress != 0xFFFF)
+    if (dataAddress != 0xFFFF)
     {
         // Start of data section, if separate from code.
         //
         out.emitSeparatorComment();
         out.emitComment("WRITABLE DATA SECTION");
-        if (monolithMode)  // no ORG needed in linker mode
-            out.ins("ORG", wordToString(dataAddress, true));
-        emitWritableGlobals(out, monolithMode);
+        emitWritableGlobals(out);
     }
 
-    if (!monolithMode)  // in linker mode, import all needed utility routines
-    {
-        out.emitSeparatorComment();
-        out.emitComment("Importing " + dwordToString(uint32_t(neededUtilitySubRoutines.size()), false) + " utility routine(s).");
-        for (set<string>::const_iterator it = neededUtilitySubRoutines.begin();
-                                        it != neededUtilitySubRoutines.end(); ++it)
-            out.emitImport(it->c_str());
-    }
+    // Import all needed utility routines.
+    //
+    out.emitSeparatorComment();
+    out.emitComment("Importing " + dwordToString(uint32_t(neededUtilitySubRoutines.size()), false) + " utility routine(s).");
+    for (set<string>::const_iterator it = neededUtilitySubRoutines.begin();
+                                    it != neededUtilitySubRoutines.end(); ++it)
+        out.emitImport(it->c_str());
 
     out.emitSeparatorComment();
 
-    if (monolithMode && targetPlatform == OS9)
-    {
-        out.emitComment("OS-9");
-        out.ins("EMOD");
-        out.emitLabel("length");
-    }
-    else
-        out.emitEnd();
+    out.emitEnd();
 }
 
 
@@ -1299,19 +1321,9 @@ TranslationUnit::emitProgramEnd(ASMText &out) const
 // Starts and ends a section.
 //
 CodeStatus
-TranslationUnit::emitWritableGlobals(ASMText &out, bool monolithMode) const
+TranslationUnit::emitWritableGlobals(ASMText &out) const
 {
     out.startSection("rwdata");
-
-    if (monolithMode)
-    {
-        out.emitLabel("writable_globals_start");
-
-        // Emit FCB or FDB directives for arrays with initializers.
-        //
-        out.emitSeparatorComment();
-        out.emitComment("WRITABLE GLOBAL VARIABLES");
-    }
 
     out.emitComment("Globals with static initializers");
     if (!emitGlobalVariables(out, false, true))
@@ -1326,13 +1338,6 @@ TranslationUnit::emitWritableGlobals(ASMText &out, bool monolithMode) const
     if (!emitGlobalVariables(out, false, false))
         return false;
     out.emitLabel("bss_end");
-
-    if (monolithMode)
-    {
-        out.emitSeparatorComment();
-        out.emitInclude("stdlib-data.inc");
-        out.emitLabel("writable_globals_end");
-    }
 
     out.endSection();
 
@@ -1629,6 +1634,13 @@ TranslationUnit::getClassDef(const std::string &className) const
 }
 
 
+ClassDef *
+TranslationUnit::getClassDef(const std::string &className)
+{
+    return const_cast<ClassDef *>(static_cast<const TranslationUnit *>(this)->getClassDef(className));
+}
+
+
 void
 TranslationUnit::registerNeededUtility(const std::string &utilitySubRoutine)
 {
@@ -1665,7 +1677,7 @@ TranslationUnit::processPragmas(uint16_t &codeAddress, bool codeAddressSetBySwit
                                 uint16_t &codeLimitAddress, bool codeLimitAddressSetBySwitch,
                                 uint16_t &dataAddress, bool dataAddressSetBySwitch,
                                 uint16_t &stackSpace,
-                                bool monolithMode, bool compileOnly)
+                                bool compileOnly)
 {
     if (! definitionList)
         return;
@@ -1677,15 +1689,15 @@ TranslationUnit::processPragmas(uint16_t &codeAddress, bool codeAddressSetBySwit
             {
                 if (targetPlatform == VECTREX)
                     pragma->errormsg("#pragma org is not permitted for Vectrex");
-                else if (!monolithMode && compileOnly)
-                    pragma->errormsg("#pragma org is not permitted in linker mode with -c (use --org)");
+                else if (compileOnly)
+                    pragma->errormsg("#pragma org is not permitted with -c (use --org)");
                 else if (codeAddressSetBySwitch)
                     pragma->warnmsg("#pragma org and --org (or --dos) both used");
             }
             else if (pragma->isCodeLimit(codeLimitAddress))  // if #pragma limit ADDRESS
             {
-                if (!monolithMode && compileOnly)
-                    pragma->errormsg("#pragma limit is not permitted in linker mode with -c (use --limit)");
+                if (compileOnly)
+                    pragma->errormsg("#pragma limit is not permitted with -c (use --limit)");
                 else if (codeLimitAddressSetBySwitch)
                     pragma->warnmsg("#pragma limit and --limit both used");
             }
@@ -1693,8 +1705,8 @@ TranslationUnit::processPragmas(uint16_t &codeAddress, bool codeAddressSetBySwit
             {
                 if (targetPlatform == VECTREX)
                     pragma->errormsg("#pragma data is not permitted for Vectrex");
-                else if (!monolithMode && compileOnly)
-                    pragma->errormsg("#pragma data is not permitted in linker mode with -c (use --data)");
+                else if (compileOnly)
+                    pragma->errormsg("#pragma data is not permitted with -c (use --data)");
                 else if (dataAddressSetBySwitch)
                     pragma->warnmsg("#pragma data and --data both used");
             }
@@ -1753,83 +1765,6 @@ bool
 TranslationUnit::isStackOverflowCheckingEnabled() const
 {
     return stackOverflowCheckingEnabled;
-}
-
-
-const TranslationUnit::StandardFunctionDeclaration TranslationUnit::stdLibTable[] =
-{
-    { "exit",       { NULL } },
-    { "printf",     { NULL } },
-    { "sprintf",    { "printf" } },  // in the standard library, _sprintf requires _printf
-    { "putchar",    { NULL } },
-    { "putstr",     { NULL } },
-    { "srand",      { NULL } },
-    { "rand",       { NULL } },
-    { "atoui",      { NULL } },
-    { "atoi",       { NULL } },
-    { "strtof",     { NULL } },
-    { "strtoul",    { NULL } },
-    { "strtol",     { NULL } },
-    { "mulww",      { NULL } },
-    { "mulwb",      { NULL } },
-    { "zerodw",     { NULL } },
-    { "adddww",     { NULL } },
-    { "subdww",     { NULL } },
-    { "cmpdww",     { NULL } },
-    { "divdww",     { NULL } },
-    { "divdwb",     { NULL } },
-    { "readword",   { NULL } },
-    { "readline",   { NULL } },
-    { "delay",      { NULL } },
-    { "strcmp",     { NULL } },
-    { "strlen",     { NULL } },
-    { "memset",     { NULL } },
-    { "memcpy",     { NULL } },
-    { "memcmp",     { NULL } },
-    { "strcpy",     { NULL } },
-    { "strncpy",    { NULL } },
-    { "strcat",     { NULL } },
-    { "strchr",     { NULL } },
-    { "strlwr",     { NULL } },
-    { "strupr",     { NULL } },
-    { "toupper",    { NULL } },
-    { "tolower",    { NULL } },
-    { "dwtoa",      { NULL } },
-    { "ftoa",       { NULL } },
-    { "sbrk",       { NULL } },
-    { "sbrkmax",    { NULL } },
-    { "set_null_ptr_handler", { NULL } },
-    { "set_stack_overflow_handler", { NULL } },
-    { "setConsoleOutHook", { NULL } },
-};
-
-
-void
-TranslationUnit::checkForNeededUtility(const string &functionId)
-{
-    for (size_t f = 0; f < sizeof(stdLibTable) / sizeof(stdLibTable[0]); ++f)
-    {
-        if (functionId == stdLibTable[f].name)
-        {
-            registerNeededUtility("_" + functionId);  // use the definition from the standard library
-            for (int r = 0; r < TranslationUnit::StandardFunctionDeclaration::MAXREQS; ++r)
-                if (stdLibTable[f].required[r])  // if functionId requires another sub-routine
-                    registerNeededUtility("_" + string(stdLibTable[f].required[r]));  // register the sub-routine too
-                else
-                    break;  // break at 1st NULL
-            break;
-        }
-    }
-}
-
-
-bool
-TranslationUnit::isStandardFunction(const std::string &functionId) const
-{
-    for (size_t f = 0; f < sizeof(stdLibTable) / sizeof(stdLibTable[0]); ++f)
-        if (functionId == stdLibTable[f].name)
-            return true;
-    return false;
 }
 
 
@@ -1997,6 +1932,13 @@ bool
 TranslationUnit::warnOnBinaryOpGivingByte() const
 {
     return isBinaryOpGivingByteWarningEnabled;
+}
+
+
+bool
+TranslationUnit::warnOnLocalVariableHidingAnother() const
+{
+    return isLocalVariableHidingAnotherWarningEnabled;
 }
 
 

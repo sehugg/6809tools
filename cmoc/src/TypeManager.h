@@ -1,4 +1,4 @@
-/*  $Id: TypeManager.h,v 1.35 2019/08/01 02:14:38 sarrazip Exp $
+/*  $Id: TypeManager.h,v 1.37 2020/04/05 02:57:22 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -138,8 +138,6 @@ public:
 
     bool isIdentiferMemberOfNamedEnum(const std::string &enumTypeName, const std::string &id) const;
 
-    void setEnumeratorTypes() const;
-
     void dumpTypes(std::ostream &out) const;
 
     // In bytes. Returns 0 if floats are not supposed on the given platform.
@@ -164,7 +162,7 @@ private:
 
     typedef std::pair<std::string, class Enumerator *> EnumeratorNamePair;
     typedef std::vector<EnumeratorNamePair> EnumeratorList;  // key: enum name
-        // NOTE: Enumerators listed in declaration order so that they get processed in that order by setEnumeratorTypes().
+        // NOTE: Enumerators listed in declaration order so that they get processed in that order by the DeclarationFinisher.
 
     mutable std::vector<TypeDesc *> types;  // see the constructor for predefined types
     TypeDefMap typeDefs;
@@ -174,6 +172,9 @@ private:
 };
 
 
+// Represents a member of an enum, e.g., A in "enum { A };".
+// In "enum {B = 42}", valueExpr is the tree that represents 42.
+//
 class Enumerator
 {
 public:

@@ -1,7 +1,7 @@
-/*  $Id: main.cpp,v 1.122 2019/10/19 03:26:48 sarrazip Exp $
+/*  $Id: main.cpp,v 1.131 2020/05/07 01:12:36 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2020 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -34,7 +34,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
-#include <sys/select.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <string.h>
@@ -78,21 +77,12 @@ public:
 
     string pkgdatadir;  // directory where CMOC support files (.h, etc.) get installed
 
-    string getAssemblerFilename() const
-    {
-        if (assemblerFilename.empty())
-            return pkgdatadir + "/a09";
-        return assemblerFilename;
-    }
-    void setAssemblerFilename(const string &newFilename)
-    {
-        assemblerFilename = newFilename;
-    }
-
     string lwasmPath;
     string lwlinkPath;
 
     bool intermediateFilesKept;
+    string intermediateDir;  // files where intermediate files (e.g., .lst, .i) are created;
+                             // if empty, use user-specified directory
 
     bool generatePrerequisitesFile;      // --deps option
     bool generatePrerequisitesFileOnly;  // --deps-only option
@@ -108,17 +98,16 @@ public:
     TargetPlatform targetPlatform;
     bool assumeTrack34;  // true = CoCo DECB Track 34 (relevant only with COCO_BASIC)
     bool generateSREC;   // generate a Motorola SREC executable
-    bool emitUncalledFunctions;
     bool callToUndefinedFunctionAllowed;
     bool warnSignCompare;
     bool warnPassingConstForFuncPtr;
     bool isConstIncorrectWarningEnabled;
     bool isBinaryOpGivingByteWarningEnabled;
+    bool isLocalVariableHidingAnotherWarningEnabled;
 
     bool wholeFunctionOptimization;
     bool forceJumpMode;
     SwitchStmt::JumpMode forcedJumpMode;
-    bool monolithMode;  // true means linker mode (lwasm, lwlink)
     size_t optimizationLevel;
     bool stackSpaceSpecifiedByCommandLine;
     uint16_t limitAddress;  // see --limit; 0xFFFF means not applicable
@@ -134,8 +123,6 @@ public:
     list<string> defines;
 
 private:
-    string assemblerFilename;  // if empty, formed from pkgdatadir (useful monolith mode only)
-
     static uint32_t getVersionInteger();
 
 public:
@@ -150,6 +137,7 @@ public:
         lwasmPath("lwasm"),
         lwlinkPath("lwlink"),
         intermediateFilesKept(false),
+        intermediateDir(),
         generatePrerequisitesFile(false),
         generatePrerequisitesFileOnly(false),
         preprocOnly(false),
@@ -163,16 +151,15 @@ public:
         targetPlatform(COCO_BASIC),
         assumeTrack34(false),
         generateSREC(false),
-        emitUncalledFunctions(false),
         callToUndefinedFunctionAllowed(false),
         warnSignCompare(false),
         warnPassingConstForFuncPtr(false),
         isConstIncorrectWarningEnabled(true),
         isBinaryOpGivingByteWarningEnabled(false),
+        isLocalVariableHidingAnotherWarningEnabled(false),
         wholeFunctionOptimization(false),
         forceJumpMode(false),
         forcedJumpMode(SwitchStmt::IF_ELSE),
-        monolithMode(false),
         optimizationLevel(2),
         stackSpaceSpecifiedByCommandLine(false),
         limitAddress(0xFFFF),
@@ -183,8 +170,7 @@ public:
         relocatabilitySupported(true),
         includeDirList(),
         searchDefaultIncludeDirs(true),
-        defines(),
-        assemblerFilename()
+        defines()
     {
     }
 
@@ -253,7 +239,6 @@ displayHelp()
         "--srec              Executable in Motorola SREC format (Disk Basic only).\n"
         "--lwasm=X           Use X as the path to the LWTOOLS assembler.\n"
         "--lwlink=X          Use X as the path to the LWTOOLS linker.\n"
-        //"--a09=X             Use assembler specified by path X instead of installed a09.\n"
         "-Idir               Add directory <dir> to the compiler's include directories\n"
         "                    (also applies to assembler).\n"
         "-Dxxx=yyy           Equivalent to #define xxx yyy\n"
@@ -273,11 +258,11 @@ displayHelp()
         "--function-stack=N  (OS-9 only.) Emit code at the start of each function to check that there\n"
         "                    is at least N bytes of free stack space in addition to local variables.\n"
         "                    0 means no stack checking. Default is 64.\n"
-        //"--emit-uncalled     Emit functions even if they are not called by C code.\n"
         //"--allow-undef-func  Allow calls to undefined functions.\n"
         "-Wsign-compare      Warn when <, <=, >, >= used on operands of differing signedness.\n"
         "-Wno-const          Do not warn about const-incorrect code.\n"
         "-Wgives-byte        Warn about binary operations on bytes giving a byte.\n"
+        "-Wlocal-var-hiding  Warn when a local variable hides another one.\n"
         "--switch=MODE       Force all switch() statements to use MODE, where MODE is 'ifelse'\n"
         "                    for an if-else sequence or 'jump' for a jump table.\n"
         "-O0|-O1|-O2         Optimization level (default is 2). Compilation is faster with -O0.\n"
@@ -285,7 +270,7 @@ displayHelp()
         "-Werror             Treat warnings as errors.\n"
         "-o FILE             Place the output in FILE (default: change C file extension to .bin).\n"
         "--intermediate|-i   Keep intermediate compilation and linking files.\n"
-        "--monolith          Compile one C file as a single unit, rather than use the linker mode.\n"
+        "--intdir=D          Put intermediate files in directory D.\n"
         "\n";
 
     cout << "Compiler data directory: " << params.pkgdatadir << "\n\n";
@@ -388,10 +373,24 @@ getDefaultOutputExtension(TargetPlatform p, bool generateSREC)
 }
 
 
+// Returns 's' if no intermediate directory has been specified or
+// if 's' already contains a directory specification.
+// Otherwise, returns the basename of 's' preceded by the specified intermediate directory.
+//
+static string
+useIntDir(const string &s)
+{
+    if (params.intermediateDir.empty() || s.find('/') != string::npos)
+        return s;
+    string res = replaceDir(s, params.intermediateDir);
+    return res;
+}
+
+
 static int
 invokeAssembler(const string &inputFilename,
-                const string &moduleName,
-                const string &outputFilename,
+                const string &objectFilename,
+                const string &lstFilename,
                 const string &targetPreprocId,
                 bool verbose)
 {
@@ -400,8 +399,8 @@ invokeAssembler(const string &inputFilename,
     string lwasmCmdLine = params.lwasmPath
                           + " -fobj --pragma=forwardrefmax"
                           + " -D" + targetPreprocId
-                          + " --output='" + outputFilename + "'"
-                          + (params.intermediateFilesKept ? " --list='" + moduleName + ".lst'" : "")
+                          + " --output='" + objectFilename + "'"
+                          + (params.intermediateFilesKept ? " --list='" + lstFilename + "'" : "")
                           + " '" + inputFilename + "'";
     if (verbose)
         cout << "Assembler command: " << lwasmCmdLine << endl;
@@ -672,7 +671,7 @@ removeIntermediateLinkingFiles(const string &linkScriptFilename,
         removeFile(*it);
 }
 
-
+#ifndef NOLINKER
 static int
 invokeLinker(const vector<string> &objectFilenames,
              const vector<string> &libraryFilenames,  // allowed to contain -l<name> elements
@@ -720,7 +719,7 @@ invokeLinker(const vector<string> &objectFilenames,
 
     for (vector<string>::const_iterator it = objectFilenames.begin();
                                        it != objectFilenames.end(); ++it)
-        lwlinkCmdLine += " '" + *it + ".o'";
+        lwlinkCmdLine += " '" + useIntDir(*it) + ".o'";
 
     for (vector<string>::const_iterator it = libraryFilenames.begin();
                                        it != libraryFilenames.end(); ++it)
@@ -777,7 +776,7 @@ invokeLinker(const vector<string> &objectFilenames,
 
     return checkLinkingMap(limitAddress, mapFilename);
 }
-
+#endif
 
 class BinFormatBlock
 {
@@ -1000,10 +999,7 @@ parseIncludeMarker(const char *line, string &filename)
 }
 
 
-// In monolith mode, finishes with generation of the assembly file.
-// In linker mode, also invokes the assembler on that file.
-//
-// compilationOutputFilename: Only used if !monolithMode.
+// Generates the assembly file and invokes the assembler on that file.
 //
 // Returns EXIT_SUCCESS or EXIT_FAILURE.
 //
@@ -1015,7 +1011,7 @@ Parameters::compileCFile(const string &inputFilename,
                          const char *targetPlatformName,
                          const char *targetPreprocId)
 {
-    assert(!compilationOutputFilename.empty() || monolithMode);
+    assert(!compilationOutputFilename.empty());
 
     if (verbose)
     {
@@ -1031,8 +1027,6 @@ Parameters::compileCFile(const string &inputFilename,
         cppCommand << " -I'" << *it << "'";
     cppCommand << " -D_CMOC_VERSION_=" << getVersionInteger();
     cppCommand << " -D" << targetPreprocId << "=1";
-    if (monolithMode)
-        cppCommand << " -DCMOC_MONOLITH";
     cppCommand << " -U__GNUC__ -nostdinc -undef";
 
     for (list<string>::const_iterator it = defines.begin(); it != defines.end(); ++it)
@@ -1061,7 +1055,6 @@ Parameters::compileCFile(const string &inputFilename,
                                             << " " << strerror(e) << endl;
         return EXIT_FAILURE;
     }
-
     PipeCloser preprocFileCloser(yyin);
 
 
@@ -1073,6 +1066,7 @@ Parameters::compileCFile(const string &inputFilename,
                                         warnPassingConstForFuncPtr,
                                         isConstIncorrectWarningEnabled,
                                         isBinaryOpGivingByteWarningEnabled,
+                                        isLocalVariableHidingAnotherWarningEnabled,
                                         relocatabilitySupported);
         char buffer[8192];
         while (fgets(buffer, sizeof(buffer), yyin) != NULL)  // while a line can be read
@@ -1105,22 +1099,18 @@ Parameters::compileCFile(const string &inputFilename,
     }
 #endif
 
-    TranslationUnitDestroyer tud(!monolithMode);  // destroy TU at end of this function, when in linker mode
+    TranslationUnitDestroyer tud(true);  // destroy TU at end of this function
 
 
     if (numErrors == 0 && !params.generatePrerequisitesFileOnly)
     {
-        // Create the translation unit object, if in linker mode.
-        // In that mode, each .c file must be compiled as a separate unit.
-        // In monolith mode, we use a single unit, which must have been created by the caller.
-        //
-        if (!monolithMode)
-            TranslationUnit::createInstance(targetPlatform,
+        TranslationUnit::createInstance(targetPlatform,
                                             callToUndefinedFunctionAllowed,
                                             warnSignCompare,
                                             warnPassingConstForFuncPtr,
                                             isConstIncorrectWarningEnabled,
                                             isBinaryOpGivingByteWarningEnabled,
+                                            isLocalVariableHidingAnotherWarningEnabled,
                                             relocatabilitySupported);
         TranslationUnit &tu = TranslationUnit::instance();
 
@@ -1135,7 +1125,7 @@ Parameters::compileCFile(const string &inputFilename,
         tu.processPragmas(params.codeAddress, params.codeAddressSetBySwitch,
                           limitAddress, limitAddressSetBySwitch,
                           params.dataAddress, params.dataAddressSetBySwitch,
-                          pragmaStackSpace, monolithMode, compileOnly);
+                          pragmaStackSpace, compileOnly);
 
         /*  Apply #pragma stack_space only if --stack-space not used.
         */
@@ -1178,7 +1168,7 @@ Parameters::compileCFile(const string &inputFilename,
 #endif
         if (numErrors == 0)
         {
-            tu.checkSemantics(params.monolithMode);  // this is when Scope objects get created in FunctionDefs
+            tu.checkSemantics();  // this is when Scope objects get created in FunctionDefs
 
             tu.allocateLocalVariables();  // in all FunctionDef objects
         }
@@ -1196,8 +1186,7 @@ Parameters::compileCFile(const string &inputFilename,
 
         if (numErrors == 0)
         {
-            tu.emitAssembler(asmText, moduleName, compileOnly, params.codeAddress, params.dataAddress,
-                             params.stackSpace, assumeTrack34, emitUncalledFunctions, monolithMode);
+            tu.emitAssembler(asmText, params.dataAddress, params.stackSpace, assumeTrack34);
 
             if (optimizationLevel > 0)
                 asmText.peepholeOptimize(optimizationLevel == 2);
@@ -1219,8 +1208,6 @@ Parameters::compileCFile(const string &inputFilename,
         {
             if (verbose)
             {
-                if (monolithMode)
-                    cout << "Assembler: " << assemblerFilename << "\n";
                 cout << "Assembly language filename: " << asmFilename << "\n";
                 cout << flush;
             }
@@ -1228,11 +1215,11 @@ Parameters::compileCFile(const string &inputFilename,
             if (!asmFile)
             {
                 int e = errno;
-                cout << PACKAGE << fatalErrorPrefix << "failed to create assembler file:"
-                                << " " << strerror(e) << endl;
+                cout << PACKAGE << fatalErrorPrefix << "failed to create assembler file " << asmFilename
+                     << ": " << strerror(e) << endl;
                 return EXIT_FAILURE;
             }
-            if (!asmText.writeFile(asmFile, monolithMode))
+            if (!asmText.writeFile(asmFile))
             {
                 cout << PACKAGE << fatalErrorPrefix << "failed to write output assembly file " << asmFilename << endl;
                 return EXIT_FAILURE;
@@ -1256,7 +1243,7 @@ Parameters::compileCFile(const string &inputFilename,
             return EXIT_FAILURE;
     }
 
-    if (!monolithMode && params.generatePrerequisitesFile)
+    if (params.generatePrerequisitesFile)
     {
         string dependenciesFilename = replaceExtension(compilationOutputFilename, ".d");
         ofstream dependenciesFile(dependenciesFilename.c_str(), ios::out);
@@ -1272,14 +1259,24 @@ Parameters::compileCFile(const string &inputFilename,
             return EXIT_SUCCESS;
     }
 
-    if (!monolithMode && !genAsmOnly)
+    if (!genAsmOnly)
     {
-        int status = invokeAssembler(asmFilename, moduleName, compilationOutputFilename, targetPreprocId, verbose);
+        string lstFilename = useIntDir(moduleName + ".lst");
+        int status = invokeAssembler(asmFilename, compilationOutputFilename, lstFilename, targetPreprocId, verbose);
         if (compileOnly || status != EXIT_SUCCESS)
             return status;
     }
 
     return EXIT_SUCCESS;
+}
+
+
+static int
+declareInvalidOption(const string &opt)
+{
+    cout << PACKAGE << ": Invalid option: " << opt << "\n";
+    displayHelp();
+    return 1;
 }
 
 
@@ -1438,12 +1435,6 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
             params.generateSREC = true;
             continue;
         }
-        if (curopt.compare(0, 6, "--a09=") == 0)
-        {
-            if (curopt.length() > 6)
-                params.setAssemblerFilename(string(curopt, 6, string::npos));
-            continue;
-        }
         if (curopt.compare(0, 8, "--lwasm=") == 0)
         {
             params.lwasmPath.assign(curopt, 8, string::npos);
@@ -1571,11 +1562,6 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
             params.functionStackSpace = (uint16_t) n;
             continue;
         }
-        if (curopt == "--emit-uncalled")
-        {
-            params.emitUncalledFunctions = true;
-            continue;
-        }
         if (curopt == "--allow-undef-func")
         {
             params.callToUndefinedFunctionAllowed = true;
@@ -1594,6 +1580,11 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
         if (curopt == "-Wgives-byte")
         {
             params.isBinaryOpGivingByteWarningEnabled = true;
+            continue;
+        }
+        if (curopt == "-Wlocal-var-hiding")
+        {
+            params.isLocalVariableHidingAnotherWarningEnabled = true;
             continue;
         }
         if (curopt == "-Wpass-const-for-func-pointer")  // not documented b/c may be annoying
@@ -1628,9 +1619,26 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
             params.intermediateFilesKept = true;
             continue;
         }
-        if (curopt == "--monolith")
+        if (startsWith(curopt, "--intdir"))
         {
-            params.monolithMode = true;
+            if (curopt.length() > 8)
+            {
+                if (curopt[8] == '=')
+                    params.intermediateDir = string(curopt, 9);
+                else
+                    return declareInvalidOption(curopt);
+            }
+            else if (argi + 1 < argc)  // if argument follows
+            {
+                ++argi;
+                params.intermediateDir = argv[argi];
+            }
+            else
+            {
+                cout << PACKAGE << ": Option --intdir not followed by directory.\n";
+                return 1;
+            }
+
             continue;
         }
         if (strncmp(curopt.c_str(), "-o", 2) == 0)
@@ -1672,11 +1680,7 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
         }
 
         if (curopt.empty() || curopt[0] == '-')
-        {
-            cout << PACKAGE << ": Invalid option: " << curopt << "\n";
-            displayHelp();
-            return 1;
-        }
+            return declareInvalidOption(curopt);
 
         break;  // end of options; argi now designates 1st non-option argument
     }
@@ -1688,101 +1692,6 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
     }
 
     return -1;
-}
-
-
-// Returns an exit status.
-//
-int
-assembleInMonolithMode(const char *targetPreprocId,
-                       const string &programName,
-                       const string &asmFilename,
-                       vector<string> &intermediateCompilationFiles)
-{
-    /*  Call the cross-assembler on the asm file to produce executable files:
-    */
-    stringstream ss;
-    ss << params.getAssemblerFilename();
-    for (list<string>::const_iterator it = params.includeDirList.begin(); it != params.includeDirList.end(); ++it)
-        ss << " --includedir='" << *it << "'";
-    if (params.targetPlatform != OS9)
-        ss << " --entry=" << hex << params.codeAddress << dec;
-    if (params.assumeTrack34)
-        ss << " --entry=2602";
-    if (params.limitAddress != 0xFFFF)
-        ss << " --limit=" << hex << params.limitAddress << dec;
-    ss << " --target=" << targetPreprocId;
-    if (params.generateSREC)
-        ss << " --srec";
-    if (params.nullPointerCheckingEnabled)
-        ss << " --check-null";
-    if (params.stackOverflowCheckingEnabled)
-        ss << " --check-stack";
-    ss << " --stack-space=" << params.stackSpace;
-    const set<string> &neededUtilitySubRoutines = TranslationUnit::instance().getNeededUtilitySubRoutines();
-    for (set<string>::const_iterator it = neededUtilitySubRoutines.begin(); it != neededUtilitySubRoutines.end(); ++it)
-        ss << " --need=" << *it;
-    if (params.verbose)
-        ss << " --verbose";
-    if (!params.outputFilename.empty())
-        ss << " --output='" << params.outputFilename << "'";
-    ss << " " << asmFilename;
-    string asmCommand = ss.str();
-
-    int status = EXIT_SUCCESS;
-
-    if (params.asmCmd)
-    {
-        // Write asmCommand in a .cmd file.
-        const string asmCmdFilename = programName + ".cmd";
-        if (params.verbose)
-            cout << "Writing assembly command in " << asmCmdFilename << endl;
-        ofstream asmCmdFile(asmCmdFilename.c_str(), ios::out);
-        if (!asmCmdFile)
-        {
-            int e = errno;
-            cout << PACKAGE << fatalErrorPrefix << "failed to create assembler command file: "
-                            << strerror(e) << endl;
-            status = EXIT_FAILURE;
-        }
-        else
-        {
-            asmCmdFile << asmCommand << '\n';
-            asmCmdFile.close();
-            if (!asmCmdFile)
-            {
-                cout << PACKAGE << fatalErrorPrefix << "failed to close output assembly command file "
-                                                    << asmCmdFilename << endl;
-                status = EXIT_FAILURE;
-            }
-        }
-    }
-
-    if (status == EXIT_SUCCESS && !params.compileOnly)  // assemble only if -c not passed
-    {
-        if (params.verbose)
-            cout << "Assembling: " << asmCommand << endl;
-
-        status = system(asmCommand.c_str());
-        if (status == -1)
-        {
-            int e = errno;
-            cout << PACKAGE << fatalErrorPrefix << "could not start assembler script: "
-                                                << strerror(e) << endl;
-            status = EXIT_FAILURE;
-        }
-        else
-        {
-            if (!WIFEXITED(status))
-                status = EXIT_FAILURE;
-            else
-                status = WEXITSTATUS(status);
-        }
-    }
-
-    removeIntermediateCompilationFiles(intermediateCompilationFiles);
-
-    return status;
 }
 
 
@@ -1811,24 +1720,13 @@ main(int argc, char *argv[])
     }
 
 
-    if (params.monolithMode)
-    {
-        if (params.targetPlatform == OS9 || params.targetPlatform == VECTREX)
-        {
-            cout << PACKAGE << ": --monolith not supported when targeting " << targetPlatformName << endl;
-            return EXIT_FAILURE;
-        }
-    }
-    else
-    {
-        // In linker mode, allow defining a prototype and calling the function,
-        // but letting another module or library define that function.
-        params.callToUndefinedFunctionAllowed = true;
+    // Allow defining a prototype and calling the function,
+    // but letting another module or library define that function.
+    params.callToUndefinedFunctionAllowed = true;
 
-        // Do not try to link if dumping the preprocessor output or only generating asm.
-        if (params.preprocOnly)
-            params.compileOnly = true;
-    }
+    // Do not try to link if dumping the preprocessor output or only generating asm.
+    if (params.preprocOnly)
+        params.compileOnly = true;
 
     if (params.genAsmOnly)
         params.compileOnly = true;
@@ -1854,7 +1752,7 @@ main(int argc, char *argv[])
 
     // Add default include dir at the end of any user-specified dirs.
     if (params.searchDefaultIncludeDirs)
-        params.includeDirList.push_back(params.pkgdatadir + (params.monolithMode ? "" : "/include"));
+        params.includeDirList.push_back(params.pkgdatadir + "/include");
 
 
     assert(argi <= argc);
@@ -1907,16 +1805,7 @@ main(int argc, char *argv[])
     string programName;
     string asmFilename;
 
-    if (params.monolithMode)
-        TranslationUnit::createInstance(params.targetPlatform,
-                                        params.callToUndefinedFunctionAllowed,
-                                        params.warnSignCompare,
-                                        params.warnPassingConstForFuncPtr,
-                                        params.isConstIncorrectWarningEnabled,
-                                        params.isBinaryOpGivingByteWarningEnabled,
-                                        params.relocatabilitySupported);
-
-    TranslationUnitDestroyer tud(params.monolithMode);
+    TranslationUnitDestroyer tud(false);
 
     int status = EXIT_SUCCESS;
 
@@ -1960,7 +1849,7 @@ main(int argc, char *argv[])
         string moduleName = getBasename(inputFilename);
         const string extension = removeExtension(moduleName);
 
-        // In linker mode, the first module name is the program name.
+        // The first module name is the program name.
         if (programName.empty())
             programName = moduleName;
 
@@ -1974,7 +1863,6 @@ main(int argc, char *argv[])
 
 
         // Determine this module's output filename (if compilation/assembly required).
-        // Note that compilationOutputFilename not used by compileCFile() when in monolith mode.
         //
         string compilationOutputFilename;
         if (extension == ".c" || extension == ".s" || extension == ".asm")
@@ -1983,15 +1871,14 @@ main(int argc, char *argv[])
             {
                 if (!params.outputFilename.empty())
                     compilationOutputFilename = params.outputFilename;
-                else if (!params.monolithMode)
-                    compilationOutputFilename = moduleName + ".o";
+                else
+                    compilationOutputFilename = useIntDir(moduleName + ".o");
             }
             else
             {
                 // In compile-and-link mode, outputFilename (if any) is the executable filename,
                 // so it cannot be used for compilationOutputFilename.
-                if (!params.monolithMode)
-                    compilationOutputFilename = moduleName + ".o";
+                compilationOutputFilename = useIntDir(moduleName + ".o");
             }
         }
 
@@ -2002,7 +1889,7 @@ main(int argc, char *argv[])
         //
         if (extension == ".c")
         {
-            asmFilename = moduleName + (params.monolithMode ? ".asm" : ".s");
+            asmFilename = useIntDir(moduleName + ".s");
 
             int s = params.compileCFile(inputFilename,
                                         moduleName,
@@ -2012,17 +1899,11 @@ main(int argc, char *argv[])
                                         targetPreprocId);
 
             objectFilenames.push_back(moduleName);
-            if (!params.genAsmOnly && (!params.monolithMode || !params.compileOnly))  // keep .s/.asm in monolith with -c
+            if (!params.genAsmOnly)
                 intermediateCompilationFiles.push_back(asmFilename);
             if (!params.intermediateFilesKept)
-                intermediateCompilationFiles.push_back(moduleName + ".lst");
-            if (params.monolithMode)
-            {
-                intermediateCompilationFiles.push_back(moduleName + ".i");
-                if (params.targetPlatform != OS9)
-                    intermediateCompilationFiles.push_back(moduleName + ".hex");
-            }
-            else if (!params.compileOnly)
+                intermediateCompilationFiles.push_back(replaceExtension(asmFilename, ".lst"));
+            if (!params.compileOnly)
                 intermediateObjectFiles.push_back(compilationOutputFilename);
 
             if (s != EXIT_SUCCESS)
@@ -2033,27 +1914,20 @@ main(int argc, char *argv[])
         }
         else if (extension == ".s" || extension == ".asm")
         {
-            if (params.monolithMode)
-            {
-                cout << PACKAGE << fatalErrorPrefix << "assembler files (" << inputFilename
-                                << ") are not supported in monolith mode" << endl;
-            }
-            else
-            {
-                int s = invokeAssembler(inputFilename, moduleName, compilationOutputFilename, targetPreprocId, params.verbose);
+            string lstFilename = useIntDir(moduleName + ".lst");
+            int s = invokeAssembler(inputFilename, compilationOutputFilename, lstFilename, targetPreprocId, params.verbose);
 
-                if (s != EXIT_SUCCESS)
-                {
-                    status = s;
-                    break;
-                }
-
-                objectFilenames.push_back(moduleName);
-                if (!params.intermediateFilesKept)
-                    intermediateCompilationFiles.push_back(moduleName + ".lst");
-                if (!params.compileOnly)
-                    intermediateObjectFiles.push_back(compilationOutputFilename);
+            if (s != EXIT_SUCCESS)
+            {
+                status = s;
+                break;
             }
+
+            objectFilenames.push_back(moduleName);
+            if (!params.intermediateFilesKept)
+                intermediateCompilationFiles.push_back(replaceExtension(asmFilename, ".lst"));
+            if (!params.compileOnly)
+                intermediateObjectFiles.push_back(compilationOutputFilename);
         }
         else if (extension == ".o")
         {
@@ -2095,22 +1969,18 @@ main(int argc, char *argv[])
             break;
         }
 
-        if (params.monolithMode)
-            break;  // only 1 module allowed in non-linker mode
-
         // If -o not used, then use 1st module name to form output filename.
         if (executableFilename.empty())
             executableFilename = moduleName + getDefaultOutputExtension(params.targetPlatform, params.generateSREC);
 
     }   // while
 
-    if (!params.monolithMode)  // these intermediate files are still needed if in monolith mode
-        removeIntermediateCompilationFiles(intermediateCompilationFiles);
+    removeIntermediateCompilationFiles(intermediateCompilationFiles);
 
     if (status != EXIT_SUCCESS)
         return status;
 
-    if (!params.monolithMode && params.compileOnly)
+    if (params.compileOnly)
         return EXIT_SUCCESS;
 
 #ifdef NOLINKER
@@ -2118,25 +1988,20 @@ main(int argc, char *argv[])
 #else
     // Link all modules together.
     //
-    if (!params.monolithMode)
-    {
-        if (params.compileOnly)
-            return EXIT_SUCCESS;
-        string linkScriptFilename = replaceExtension(executableFilename, ".link");
-        string mapFilename = replaceExtension(executableFilename, ".map");
-        status = invokeLinker(objectFilenames, libraryFilenames, params.useDefaultLibraries,
-                              linkScriptFilename, mapFilename,
-                              executableFilename,
-                              params.targetPlatform, params.libDirs,
-                              params.limitAddress, params.generateSREC, params.verbose);
-        removeIntermediateLinkingFiles(linkScriptFilename, mapFilename, intermediateObjectFiles);
+    if (params.compileOnly)
+        return EXIT_SUCCESS;
+    string linkScriptFilename = useIntDir(replaceExtension(executableFilename, ".link"));
+    string mapFilename = useIntDir(replaceExtension(executableFilename, ".map"));
+    status = invokeLinker(objectFilenames, libraryFilenames, params.useDefaultLibraries,
+                            linkScriptFilename, mapFilename,
+                            executableFilename,
+                            params.targetPlatform, params.libDirs,
+                            params.limitAddress, params.generateSREC, params.verbose);
+    removeIntermediateLinkingFiles(linkScriptFilename, mapFilename, intermediateObjectFiles);
 
-        if (status == EXIT_SUCCESS && params.targetPlatform == DRAGON)
-            status = convertBinToDragonFormat(executableFilename, params.verbose);
+    if (status == EXIT_SUCCESS && params.targetPlatform == DRAGON)
+        status = convertBinToDragonFormat(executableFilename, params.verbose);
 
-        return status;
-    }
-
-    return assembleInMonolithMode(targetPreprocId, programName, asmFilename, intermediateCompilationFiles);
+    return status;
 #endif
 }

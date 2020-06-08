@@ -1,7 +1,7 @@
-/*  $Id: BinaryOpExpr.cpp,v 1.154 2019/10/19 03:26:48 sarrazip Exp $
+/*  $Id: BinaryOpExpr.cpp,v 1.163 2020/06/07 14:53:53 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2020 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -32,6 +32,7 @@
 #include "FunctionCallExpr.h"
 #include "DWordConstantExpr.h"
 #include "StringLiteralExpr.h"
+#include "CommaExpr.h"
 
 #include <assert.h>
 
@@ -811,7 +812,11 @@ BinaryOpExpr::emitAdd(ASMText &out, bool lValue, bool doSub) const
     if (lValue)
     {
         if (!getTypeDesc()->isRealOrLong())
+        {
+            errormsg("internal error: unexpected l-value of type `%s' in BinaryOpExpr::emitAdd()",
+                     getTypeDesc()->toString().c_str());
             return false;
+        }
 
         return emitRealOrLongOp(out, doSub ? "sub" : "add");
     }
@@ -1302,30 +1307,19 @@ isSingleByteConstant(const Tree &tree)
 }
 
 
-// In the positive, returns the tree itself or the cast's subtree,
-// depending on which is unsigned char.
+// In the positive, returns the tree itself.
 // Returns NULL otherwise.
 //
 static const Tree *
-isUnsignedBytePossiblyCastToUnsignedWord(const Tree &tree)
+isEffectiveUnsignedByte(const Tree &tree)
 {
-    if (isSingleByteConstant(tree))
-        return &tree;
     if (tree.isSigned())
         return NULL;
+    if (isSingleByteConstant(tree))
+        return &tree;
     if (tree.getType() == BYTE_TYPE)
         return &tree;
-    const CastExpr *ce = dynamic_cast<const CastExpr *>(&tree);
-    if (!ce)
-        return NULL;
-    if (ce->getType() != WORD_TYPE || ce->isSigned())
-        return NULL;
-    const Tree *sub = ce->getSubExpr();
-    if (isSingleByteConstant(*sub))
-        return sub;
-    if (sub->getType() != BYTE_TYPE || sub->isSigned())
-        return NULL;
-    return sub;
+    return NULL;
 }
 
 
@@ -1335,10 +1329,10 @@ isUnsignedBytePossiblyCastToUnsignedWord(const Tree &tree)
 bool
 BinaryOpExpr::emitMulOfTypeUnsignedBytesGivingUnsignedWord(ASMText &out) const
 {
-    const Tree *leftUnsignedByteExpr = isUnsignedBytePossiblyCastToUnsignedWord(*subExpr0);
+    const Tree *leftUnsignedByteExpr = isEffectiveUnsignedByte(*subExpr0);
     if (!leftUnsignedByteExpr)  // if left side not unsigned char
         return false;
-    const Tree *rightUnsignedByteExpr = isUnsignedBytePossiblyCastToUnsignedWord(*subExpr1);
+    const Tree *rightUnsignedByteExpr = isEffectiveUnsignedByte(*subExpr1);
     if (!rightUnsignedByteExpr)  // if right side not unsigned char
         return false;
 
@@ -1724,11 +1718,81 @@ BinaryOpExpr::emitLogicalOr(ASMText &out, bool lValue) const
 CodeStatus
 BinaryOpExpr::emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide, bool lValue) const
 {
+    uint16_t numBits = 0;
+    bool constShift = subExpr1->evaluateConstantExpr(numBits);
+
     if (lValue && isLong())
     {
         assert(subExpr0->isLong());
         assert(subExpr0->isSigned() == isSigned());
 
+        // Special case: Shifting unsigned long in place by 8, 16 or 24 bits.
+        if (!resultDeclaration && !subExpr0->isSigned() && constShift && (numBits == 8 || numBits == 16 || numBits == 24))
+        {
+            if (!subExpr0->emitCode(out, true))  // get address of left side long in X
+                return false;
+            if (isLeftShift)
+            {
+                switch (numBits)
+                {
+                case 8:
+                    out.ins("LDD", "1,X", "load middle word of unsigned long");
+                    out.ins("STD", ",X", "store in high word of unsigned long");
+                    out.ins("LDB", "3,X", "load low byte of unsigned long");
+                    out.ins("STB", "2,X", "store in 2nd lowest byte of unsigned long");
+                    out.ins("CLR", "3,X", "clear low byte");
+                    break;
+                case 16:
+                    out.ins("LDD", "2,X", "load low word of unsigned long");
+                    out.ins("STD", ",X", "store in high word of unsigned long");
+                    out.ins("CLR", "2,X", "clear 2nd lowest byte");
+                    out.ins("CLR", "3,X", "clear low byte");
+                    break;
+                case 24:
+                    out.ins("LDB", "3,X", "load low byte of unsigned long");
+                    out.ins("STB", ",X", "store in high byte of unsigned long");
+                    out.ins("CLR", "1,X", "clear 2nd higest byte");
+                    out.ins("CLR", "2,X", "clear 2nd lowest byte");
+                    out.ins("CLR", "3,X", "clear low byte");
+                    break;
+                default:
+                    assert(false);
+                    return false;
+                }
+            }
+            else
+            {
+                switch (numBits)
+                {
+                case 8:
+                    out.ins("LDD", "1,X", "load middle word of unsigned long");
+                    out.ins("STD", "2,X", "store in low word of unsigned long");
+                    out.ins("LDB", ",X", "load high byte of unsigned long");
+                    out.ins("STB", "1,X", "store in 2nd highest byte of unsigned long");
+                    out.ins("CLR", ",X", "clear high byte");
+                    break;
+                case 16:
+                    out.ins("LDD", ",X", "load high word of unsigned long");
+                    out.ins("STD", "2,X", "store in low word of unsigned long");
+                    out.ins("CLR", ",X", "clear highest byte");
+                    out.ins("CLR", "1,X", "clear 2nd higest byte");
+                    break;
+                case 24:
+                    out.ins("LDB", ",X", "load high byte of unsigned long");
+                    out.ins("STB", "3,X", "store in low byte of unsigned long");
+                    out.ins("CLR", ",X", "clear highest byte");
+                    out.ins("CLR", "1,X", "clear 2nd higest byte");
+                    out.ins("CLR", "2,X", "clear 2nd lowest byte");
+                    break;
+                default:
+                    assert(false);
+                    return false;
+                }
+            }
+            return true;  // leave with address of unsigned long in X, since we are emitting an l-value
+        }
+
+        // Evaluate the number of bits to shift by.
         if (subExpr1->isLong())
         {
             if (!subExpr1->emitCode(out, true))  // get address of long in X
@@ -1741,7 +1805,8 @@ BinaryOpExpr::emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide, boo
             if (!subExpr1->emitCode(out, false))  // get number of shifts in D
                 return false;
         }
-        if (!isLeftShift)  // if right shift on signed value, do arithmetic shift, i.e., sign extension
+
+        if (!isLeftShift)  // if right shift
         {
             if (isSigned())
                 out.ins("LDA", "#$FF", "request sign extension");
@@ -1764,9 +1829,6 @@ BinaryOpExpr::emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide, boo
     }
 
     bool isLeftByte = (getType() == BYTE_TYPE);
-
-    uint16_t numBits = 0;
-    bool constShift = subExpr1->evaluateConstantExpr(numBits);
 
     if (constShift && numBits <= 7)  // if number of bits to shift by is a constant and small
     {
@@ -2423,7 +2485,6 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op op) const
     // Process &=, |= and ^= for the 32-bit cases.
     if (isLong() && (op == AND_ASSIGN || op == OR_ASSIGN || op == XOR_ASSIGN))
     {
-        assert(lValue);
         return emitLongBitwiseOpAssign(out);
     }
 
@@ -2917,11 +2978,9 @@ BinaryOpExpr::emitArrayRef(ASMText &out, bool lValue) const
         out.ins("LEAX", sle->getArg());
     else
     {
-        bool wantLeftSideLValue = (subExpr0->getType() == ARRAY_TYPE);
-        if (!subExpr0->emitCode(out, wantLeftSideLValue))
+        if (!subExpr0->emitCode(out, false))
             return false;
-        if (!wantLeftSideLValue)  // if left side is pointer, we loaded its value in D
-            out.ins("TFR", "D,X");
+        out.ins("TFR", "D,X");
     }
 
     if (checkNullPtr)
@@ -3117,8 +3176,23 @@ BinaryOpExpr::emitBoolJumps(ASMText &out,
     }
 
 
-    // Not ||, && or relational operator, so compare expression with zero:
+    // Not ||, && or relational operator.
 
+    // If comma operator, evaluate all sub-expression except last, then call
+    // this function recursively on last sub-expr.
+    //
+    if (const CommaExpr *commaExpr = dynamic_cast<const CommaExpr *>(condition))
+    {
+        assert(commaExpr->size() >= 2);
+        vector<Tree *>::const_iterator it;
+        for (it = commaExpr->begin(); it + 1 != commaExpr->end(); ++it)
+            if (!(*it)->emitCode(out, false))  // emit code but ignore resulting value
+                return false;
+        return BinaryOpExpr::emitBoolJumps(out, *it, successLabel, failureLabel);
+    }
+
+    // For a struct-based type, we have to evaluate an l-value.
+    //
     if (condition->isRealOrLong())
     {
         if (!condition->emitCode(out, true))  // get address of number in X

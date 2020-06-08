@@ -1,3 +1,69 @@
+2020-06-07: Version 0.1.67 released
+
+    Fixed an issue with the unsigned long shifting optimization
+    introduced in version 0.1.66.
+
+2020-06-06: Version 0.1.66 released
+
+    New -Wlocal-var-hiding command line switch makes the compiler issue
+    a warning when a local variable declaration hides another one of the
+    same name.
+
+    Fixed a bug where a global variable initializer of the form &array[N]
+    was rejected as being non constant.
+
+    Added a low-level optimization that removes an unneeded LDB instruction
+    when a byte gets compared with two values.
+
+    Added an optimization for shifting an unsigned long by 8, 16 or 24
+    bits, left or right.
+
+    Added an optimization for the evaluation of a loop condition based
+    on a comma-expression.
+
+    Removed non-breakable spaces from several source files.
+
+    Monolith compilation mode is not offered anymore. This also means that
+    the --emit-uncalled command-line switch has been removed.
+
+2020-04-24: Version 0.1.65 released
+
+    Added stricmp() and memicmp() (for ASCII case-insensitive comparisons)
+    to the CMOC library. (To be declared by #including <cmoc.h>.)
+
+    Fixed a crash that happened on |=, &= and ^=, or some casts, when used
+    inside an if() statement.
+
+    Fixed an internal error that happened on some array references whose
+    left side is an addition operation.
+
+2020-04-05: Version 0.1.64 released
+
+    Fixed a bug with enumerated names that depended on a sizeof expression
+    and with array declarations that depended on such enumerated names.
+
+2020-03-21: Version 0.1.63 released
+
+    Fixed a 16-bit by 8-bit multiplication code generation bug to make
+    sure that a 16-bit multiplication is done in those cases.
+
+2020-03-01: Version 0.1.62 released
+
+    Fixed global variable initialization so that non-constant initializer
+    expressions are rejected as in Standard C.
+
+    Fixed crashes where a class definition was not associated with its
+    type descriptor.
+
+    Added the --intdir=D command-line option, which can be used to have
+    the intermediate files generated in directory D.
+
+    Added strstr() to CMOC's library.
+
+    The 'pdf' makefile target in the 'doc' subdirectory creates a PDF
+    of the manual, provided that the pandoc and pdflatex commands are
+    installed and in the path.
+
 2019-10-21: Version 0.1.61 released
 
     New command-line option -Wgives-byte tells CMOC to warn about

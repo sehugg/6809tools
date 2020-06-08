@@ -1715,7 +1715,8 @@ program => q!
     }
     !,
 expected => [
-    qq!,check-prog.c:8: __error__: unknown enumerator `P'!,
+    qq!,check-prog.c:8: __error__: right side of operator - is of type void!,
+        # Not a good error message: we should mention that "P" is undeclared.
     ]
 },
 
@@ -2004,7 +2005,8 @@ program => q!
     }
     !,
 expected => [
-    qq!,check-prog.c:2: __error__: unknown enumerator `A'!,
+    qq!,check-prog.c:2: __error__: left side of operator + is of type void!,
+        # Not a good error message: we should mention that "A" is undeclared.
     ]
 },
 
@@ -2714,7 +2716,7 @@ program => q!
     typedef int ;
     typedef int , ;
     typedef int A, , B , ;
-    void f(int, char *) {}  // unnamed function parameters are OK
+    void f(int, char *) {}  // unnamed function parameters are OK
     int main()
     {
         int , , ;
@@ -2982,6 +2984,64 @@ expected => [
 },
 
 
+{
+title => q{Initializer element is not constant},
+program => q!
+    int f();
+    int g = f();
+    const int a[] = { 0 };
+    const int *p = a + (sizeof a)/(sizeof(int));  // OK
+    const int n = sizeof(a) + 1;  // OK
+    const int k = n;
+    const int *p1 = a + (sizeof a)/(sizeof(int)) + 5;  // OK
+    const int *p2 = a + ((sizeof a)/(sizeof(int)) + 5);  // OK
+    const int *p3 = 7 + a;  // OK
+    struct S { int m; };
+    struct S v[5];
+    struct S *e = &v[5];  // OK
+    struct S mat[5][3];
+    struct S *e1 = &mat[5][3];  // OK
+    int j;
+    struct S *e2 = &mat[5][j];  // bad
+    struct S *e3 = &mat[j][3];  // bad
+    struct S *e4 = &mat[j][j];  // bad
+    int main()
+    {
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:3: __error__: initializer element is not constant!,
+    qq!,check-prog.c:7: __error__: initializer element is not constant!,
+    qq!,check-prog.c:17: __error__: initializer element is not constant!,
+    qq!,check-prog.c:18: __error__: initializer element is not constant!,
+    qq!,check-prog.c:19: __error__: initializer element is not constant!,
+    ]
+},
+
+
+{
+title => q{Warn when a local variable hides another one},
+options => "-Wlocal-var-hiding",
+program => q!
+    int g;
+    int main()
+    {
+        int local;
+        if (1)
+        {
+            int local;  // hides previous 'local'
+            int g;  // OK to hide global 'g'
+        }
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:8: __warning__: Local variable `local' hides local variable `local' declared at ,check-prog.c:5!,
+    ]
+},
+
+
 #{
 #title => q{Sample test},
 #program => q!
@@ -3117,6 +3177,8 @@ sub compileProgram
     my $line;
     while ($line = <$fh>)
     {
+        next if $line =~ /^# /;  # ignore debugging traces
+
         $line =~ s/\s+$//s;
         
         if (0 && $line =~ /^#/)  # activate this to ignore debugging output lines

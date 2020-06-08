@@ -1,4 +1,4 @@
-/*  $Id: ExpressionTypeSetter.cpp,v 1.71 2019/10/12 22:47:11 sarrazip Exp $
+/*  $Id: ExpressionTypeSetter.cpp,v 1.74 2020/04/05 03:16:01 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -30,12 +30,12 @@
 #include "VariableExpr.h"
 #include "IdentifierExpr.h"
 #include "CommaExpr.h"
+#include "Declaration.h"
 
 using namespace std;
 
 
 ExpressionTypeSetter::ExpressionTypeSetter()
-:   unknownEnumeratorDetectionEnabled(false)
 {
 }
 
@@ -151,13 +151,15 @@ ExpressionTypeSetter::close(Tree *t)
         Tree *subExpr = om->getSubExpr();
         if (om->isDirect() && subExpr->getType() != CLASS_TYPE)
         {
-            om->errormsg("left side of dot operator is not a struct");
+            om->errormsg("left side of dot operator must be a struct but is of type %s",
+                         subExpr->getTypeDesc()->toString().c_str());
             return true;
         }
         if (!om->isDirect() && (subExpr->getType() != POINTER_TYPE
             || subExpr->getTypeDesc()->getPointedType() != CLASS_TYPE))
         {
-            om->errormsg("left side of arrow operator is not a pointer to a struct");
+            om->errormsg("left side of arrow operator must be a pointer to a struct but is of type %s",
+                         subExpr->getTypeDesc()->toString().c_str());
             return true;
         }
 
@@ -172,22 +174,43 @@ ExpressionTypeSetter::close(Tree *t)
 
     const TypeManager &tm = TranslationUnit::getTypeManager();
 
-    // Identifier that refers to an enumerated name.
+    // Identifier that may refer to an enumerated name or to a global variable name.
     // If an IdentifierExpr refers to something else,
     // it gets typed in ScopeCreator::processIdentifierExpr().
     //
-    if (const IdentifierExpr *ie = dynamic_cast<IdentifierExpr *>(t))
+    if (IdentifierExpr *ie = dynamic_cast<IdentifierExpr *>(t))
     {
-        // If the identifier is an enumerated name, we get its TypeDesc and
-        // set it as the type of this IdentifierExpr.
-        //
-        const TypeDesc *td = tm.getEnumeratorTypeDesc(ie->getId());
-        if (td && td->type != VOID_TYPE)
-            t->setTypeDesc(td);
-        else if (unknownEnumeratorDetectionEnabled)
+        const VariableExpr *ve = ie->getVariableExpr();
+
+        bool done = false;
+        if (ve == NULL) // Check if this identifier refers to a global variable, give it a VariableExpr if true
         {
-            t->errormsg("unknown enumerator `%s'", ie->getId().c_str());
-            t->setTypeDesc(tm.getIntType(WORD_TYPE, true));
+            const Scope &globalScope = TranslationUnit::instance().getGlobalScope();
+            Declaration *decl = globalScope.getVariableDeclaration(ie->getId(), false);
+            if (decl)
+            {
+                t->setTypeDesc(decl->getTypeDesc());
+
+                // Give the IdentifierExpr a VariableExpr.
+                VariableExpr *ve = new VariableExpr(ie->getId());
+                ve->setDeclaration(decl);
+
+                assert(decl->getType() != VOID_TYPE);
+                ve->setTypeDesc(decl->getTypeDesc());
+                ie->setVariableExpr(ve);  // sets the type of *ie, which was already set in this case
+
+                done = true;
+            }
+        }
+        if (!done)
+        {
+            // If the identifier is an enumerated name, we get its TypeDesc and
+            // set it as the type of this IdentifierExpr.
+            //
+            const TypeDesc *td = tm.getEnumeratorTypeDesc(ie->getId());
+            if (td && td->type != VOID_TYPE)
+                t->setTypeDesc(td);
+
         }
     }
 

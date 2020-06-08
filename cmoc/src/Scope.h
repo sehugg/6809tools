@@ -1,4 +1,4 @@
-/*  $Id: Scope.h,v 1.9 2018/09/16 03:34:40 sarrazip Exp $
+/*  $Id: Scope.h,v 1.10 2020/04/04 17:41:44 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -34,7 +34,7 @@ public:
     // Calls addSubScope(this) on _parent if _parent is not null.
     // _parent thus becomes owner of this Scope.
     //
-    Scope(Scope *_parent);
+    Scope(Scope *_parent, const std::string &_startLineNo);
 
     // Calls delete on each sub-scope of this scope.
     //
@@ -114,6 +114,7 @@ private:
                                 // no two entries may have same string value
     std::map<std::string, ClassDef *> classTable;
                                 // owns the pointed objects
+    std::string startLineNo;
 
     // Forbidden operations:
     Scope(const Scope &x);

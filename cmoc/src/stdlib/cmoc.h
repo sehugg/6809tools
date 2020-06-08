@@ -52,7 +52,9 @@ void putchar(int c);
 #endif
 
 int strcmp(_CMOC_CONST_ char *s1, _CMOC_CONST_ char *s2);
+int stricmp(_CMOC_CONST_ char *s1, _CMOC_CONST_ char *s2);
 int memcmp(_CMOC_CONST_ void *s1, _CMOC_CONST_ void *s2, size_t n);
+int memicmp(_CMOC_CONST_ void *s1, _CMOC_CONST_ void *s2, size_t n);
 void *memcpy(void *dest, _CMOC_CONST_ void *src, size_t n);
 void *memset(void *s, int c, size_t n);
 size_t strlen(_CMOC_CONST_ char *s);
@@ -60,6 +62,7 @@ char *strcpy(char *dest, _CMOC_CONST_ char *src);
 char *strcat(char *dest, _CMOC_CONST_ char *src);
 char *strncpy(char *dest, _CMOC_CONST_ char *src, size_t n);
 char *strchr(_CMOC_CONST_ char *s, int c);
+char *strstr(const char *haystack, const char *needle);
 char *strlwr(char *s);
 char *strupr(char *s);
 

@@ -1,4 +1,4 @@
-/*  $Id: ASMText.cpp,v 1.125 2019/10/09 01:42:01 sarrazip Exp $
+/*  $Id: ASMText.cpp,v 1.132 2020/06/06 04:41:43 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
@@ -205,12 +205,9 @@ ASMText::emitInclude(const string &filename)
 
 
 void
-ASMText::writeInclude(ostream &out, const Element &e, bool monolithMode)
+ASMText::writeInclude(ostream &out, const Element &e)
 {
-    if (monolithMode)
-        out << "#include \"" << e.fields[0] << "\"\n";
-    else
-        out << "\t" "INCLUDE " << e.fields[0] << "\n";
+      out << "\t" "INCLUDE " << e.fields[0] << "\n";
 }
 
 
@@ -238,6 +235,7 @@ ASMText::endSection()
 void
 ASMText::emitExport(const char *label)
 {
+    assert(label && label[0]);
     addElement(EXPORT, label);
 }
 
@@ -245,6 +243,7 @@ ASMText::emitExport(const char *label)
 void
 ASMText::emitImport(const char *label)
 {
+    assert(label && label[0]);
     addElement(IMPORT, label);
 }
 
@@ -271,7 +270,7 @@ ASMText::optimizeWholeFunctions()
     {
         const Element &e = elements[i];
         cout << "### " << setw(5) << i << ". ";
-        writeElement(cout, e, true);
+        writeElement(cout, e);
         switch (e.type)
         {
         case FUNCTION_START:
@@ -639,6 +638,8 @@ ASMText::peepholeOptimize(bool useStage2Optims)
                 else if (removeUselessClrb(i))
                     modified = true;
                 else if (optimizeDXAliases(i))
+                    modified = true;
+                else if (removeLoadInComparisonWithTwoValues(i))
                     modified = true;
             }
         }
@@ -3961,8 +3962,9 @@ ASMText::coalesceConsecutiveLeax(size_t index) {
                      e1.fields[1].substr(comma1Index, string::npos);
     } else {
       size_t comma2Index = e2.fields[1].find(",");
-      e1.fields[1] = e1.fields[1].substr(0, comma1Index) + "+" +
-                     e2.fields[1].substr(0, comma2Index) +     
+      const string c2 = e2.fields[1].substr(0, comma2Index);
+      const char *plus = (c2.empty() ? "" : "+");
+      e1.fields[1] = e1.fields[1].substr(0, comma1Index) + plus + c2 +     
                      e1.fields[1].substr(comma1Index, string::npos);
     }
     commentOut(index + 1, "optim: coalesceConsecutiveLeax");
@@ -4412,6 +4414,67 @@ ASMText::optimizeDXAliases(size_t index) {
 }
 
 
+/*  An expression like 'c < ' ' || c > 127' can give this code:
+        LDB	    5,U		  variable c
+        CMPB	  #$20	
+        BLO	    foo
+        LDB	    5,U		  variable c
+        CMPB    #$7F
+    This function eliminates the 2nd LDB.
+*/
+bool
+ASMText::removeLoadInComparisonWithTwoValues(size_t index)
+{
+    // Check for starting LDB.
+    size_t firstLDBIndex = findNextInstrBeforeLabel(index);
+    if (firstLDBIndex == size_t(-1))
+        return false;
+    const Element &firstLDB = elements[firstLDBIndex];
+    if (firstLDB.fields[0] != "LDB")
+        return false;
+
+    // Require a CMPB after LDB.
+    size_t firstCMPBIndex = findNextInstrBeforeLabel(firstLDBIndex + 1);
+    if (firstCMPBIndex == size_t(-1))
+        return false;
+    const Element &firstCMPB = elements[firstCMPBIndex];
+    if (firstCMPB.fields[0] != "CMPB")
+        return false;
+
+    // Require a condition branch instruction after CMPB.
+    size_t branchIndex = findNextInstrBeforeLabel(firstCMPBIndex + 1);
+    if (branchIndex == size_t(-1))
+        return false;
+    const Element &branch = elements[branchIndex];
+    if (! isConditionalBranch(branch.fields[0].c_str()))
+        return false;
+
+    // Require an LDB after the branch.
+    size_t secondLDBIndex = findNextInstrBeforeLabel(branchIndex + 1);
+    if (secondLDBIndex == size_t(-1))
+        return false;
+    const Element &secondLDB = elements[secondLDBIndex];
+    if (secondLDB.fields[0] != "LDB")
+        return false;
+
+    // Require the 2nd LDB to have the same argument as the 1st one.
+    if (secondLDB.fields[1] != firstLDB.fields[1])
+        return false;
+
+    // Require a 2nd CMPB after the 2nd LDB.
+    size_t secondCMPBIndex = findNextInstrBeforeLabel(secondLDBIndex + 1);
+    if (secondCMPBIndex == size_t(-1))
+        return false;
+    const Element &secondCMPB = elements[secondCMPBIndex];
+    if (secondCMPB.fields[0] != "CMPB")
+        return false;
+
+    // Remove the 2nd LDB.
+    commentOut(secondLDBIndex, "optim: removeLoadInComparisonWithTwoValues");
+    return true;  // modified the code
+}
+
+
 bool
 ASMText::isInstr(size_t index, const char *ins, const char *arg) const
 {
@@ -4587,7 +4650,7 @@ ASMText::isConditionalBranch(const char *ins)
 // the branch instruction that is equivalent when the comparison operands
 // are reversed.
 // For example, if k <= n is to be replaced with n >= k, then
-// { LDD k; CMPD n; BLS z } must be replaced with { LDD n; CMPD k; BHS z }.
+// { LDD k; CMPD n; BLS z } must be replaced with { LDD n; CMPD k; BHS z }.
 //
 bool
 ASMText::isRelativeSizeConditionalBranch(size_t index, char invertedOperandsBranchInstr[INSTR_NAME_BUFSIZ]) const
@@ -4704,7 +4767,8 @@ ASMText::isDataDirective(const std::string &instruction)
 }
 
 
-// Returns size_t(-1) if no instruction found before a non-instruction is found.
+// Returns size_t(-1) if no instruction is found before a non-instruction is found.
+// The search starts at elements[index], inclusively.
 // Tolerates comments.
 //
 size_t
@@ -4840,7 +4904,7 @@ ASMText::isAbsoluteAddress(const string &arg)
 
 
 void
-ASMText::writeElement(ostream &out, const Element &e, bool monolithMode)
+ASMText::writeElement(ostream &out, const Element &e)
 {
     switch (e.type)
     {
@@ -4849,7 +4913,7 @@ ASMText::writeElement(ostream &out, const Element &e, bool monolithMode)
     case LABEL:         writeLabel(out, e);               break;
     case COMMENT:       writeComment(out, e);             break;
     case SEPARATOR:     writeSeparatorComment(out, e);    break;
-    case INCLUDE:       writeInclude(out, e, monolithMode); break;
+    case INCLUDE:       writeInclude(out, e);             break;
     case FUNCTION_START:
         out << "* FUNCTION " << e.fields[0] << "(): defined at " << e.fields[1] << "\n";
         break;
@@ -4860,20 +4924,16 @@ ASMText::writeElement(ostream &out, const Element &e, bool monolithMode)
         out << "funcsize_" << e.fields[0] << "\tEQU\tfuncend_" << e.fields[0] << "-_" << e.fields[0] << "\n";
         break;
     case SECTION_START:
-        if (!monolithMode)
-            out << "\n\n\t""SECTION\t" << e.fields[0] << "\n\n\n";
+        out << "\n\n\t""SECTION\t" << e.fields[0] << "\n\n\n";
         break;
     case SECTION_END:
-        if (!monolithMode)
-            out << "\n\n\t""ENDSECTION\n\n\n";
+        out << "\n\n\t""ENDSECTION\n\n\n";
         break;
     case EXPORT:
-        if (!monolithMode)
-            out << e.fields[0] << "\t""EXPORT\n";
+        out << e.fields[0] << "\t""EXPORT\n";
         break;
     case IMPORT:
-        if (!monolithMode)
-            out << e.fields[0] << "\t""IMPORT\n";
+        out << e.fields[0] << "\t""IMPORT\n";
         break;
     case END:
         out << "\t""END\n";
@@ -4884,10 +4944,10 @@ ASMText::writeElement(ostream &out, const Element &e, bool monolithMode)
 
 
 bool
-ASMText::writeFile(ostream &out, bool monolithMode)
+ASMText::writeFile(ostream &out)
 {
     for (vector<Element>::const_iterator it = elements.begin(); it != elements.end(); ++it)
-        writeElement(out, *it, monolithMode);
+        writeElement(out, *it);
 
     return out.good();
 }

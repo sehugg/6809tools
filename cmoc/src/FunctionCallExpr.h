@@ -1,4 +1,4 @@
-/*  $Id: FunctionCallExpr.h,v 1.23 2019/10/12 22:47:12 sarrazip Exp $
+/*  $Id: FunctionCallExpr.h,v 1.24 2020/05/07 00:26:10 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -33,8 +33,6 @@ public:
     FunctionCallExpr(Tree *func, TreeSequence *args);
 
     virtual ~FunctionCallExpr();
-
-    void setMonolithMode(bool _monolithMode) { monolithMode = _monolithMode; }
 
     /** Checks that this function call is valid and sets the return TypeDesc.
         If errors are detected, they are reported.
@@ -110,7 +108,6 @@ private:
     Declaration *funcPtrVarDecl;  // non null when calling through function pointer variable
     TreeSequence *arguments;  // owns the pointed object
     Declaration *returnValueDeclaration;  // used when return type is struct/union; owns the pointed object
-    bool monolithMode;
 
 };
 

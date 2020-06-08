@@ -1,4 +1,4 @@
-/*  $Id: CastExpr.cpp,v 1.11 2018/09/22 05:46:35 sarrazip Exp $
+/*  $Id: CastExpr.cpp,v 1.12 2020/04/10 02:26:03 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -110,8 +110,6 @@ CastExpr::emitCode(ASMText &out, bool lValue) const
 
     if ((isLong() && subExpr->isReal()) || (isReal() && subExpr->isLong()))
     {
-        assert(lValue);  // result is long number, so caller must expect its address in X
-
         if (!subExpr->emitCode(out, true))  // get address of source number in X
             return false;
         assert(resultDeclaration);
@@ -156,8 +154,6 @@ CastExpr::emitCode(ASMText &out, bool lValue) const
 
     if (isRealOrLong() && subExpr->isIntegral())
     {
-        assert(lValue);  // result is real/long number, so caller must expect its address in X
-
         if (!subExpr->emitCode(out, false))  // load integral in B or D
             return false;
         if (subExpr->getType() == BYTE_TYPE)

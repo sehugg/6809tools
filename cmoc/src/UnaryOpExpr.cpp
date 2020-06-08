@@ -1,4 +1,4 @@
-/*  $Id: UnaryOpExpr.cpp,v 1.48 2019/10/09 01:42:01 sarrazip Exp $
+/*  $Id: UnaryOpExpr.cpp,v 1.51 2020/04/05 03:02:58 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
@@ -242,17 +242,6 @@ UnaryOpExpr::setSizeofArgTypeDesc()
     {
         sizeofArgTypeDesc = subExpr->getTypeDesc();
         assert(sizeofArgTypeDesc != NULL);
-
-        // At this point, if the argument is invalid (e.g., an unknown variable name),
-        // then sizeofArgTypeDesc->type is VOID_TYPE. We assume that an error message
-        // has already been issued about the invalid argument.
-
-        if (sizeofArgTypeDesc->type == ARRAY_TYPE
-                && (! subExpr->asVariableExpr()
-                   && ! dynamic_cast<ObjectMemberExpr *>(subExpr)
-                   && ! dynamic_cast<StringLiteralExpr *>(subExpr)
-                   && ! isArrayRef(subExpr)))
-            errormsg("taking size of array expression that is not an array name nor a struct member");
     }
 
     assert(sizeofArgTypeDesc != NULL);
@@ -282,7 +271,7 @@ UnaryOpExpr::getSizeOfValue(uint16_t &size) const
     size = 0;  // ensure defined value
     assert(sizeofArgTypeDesc != NULL);  // should have been set by a ctor or by checkSemantics()
 
-    if (subExpr == NULL || (sizeofArgTypeDesc && sizeofArgTypeDesc->type != ARRAY_TYPE))
+    if (subExpr == NULL)
     {
         if (sizeofArgTypeDesc->type == CLASS_TYPE && TranslationUnit::instance().getClassDef(sizeofArgTypeDesc->className) == NULL)
             return false;  // error msg already emitted by checkForSizeOfUnknownStruct()
@@ -424,6 +413,15 @@ UnaryOpExpr::getSizeOfValue(uint16_t &size) const
             return false;
         }
         size = uint16_t(decodedLength) + 1;
+        return true;
+    }
+
+    if (sizeofArgTypeDesc && sizeofArgTypeDesc->type != ARRAY_TYPE)
+    {
+        if (sizeofArgTypeDesc->type == CLASS_TYPE && TranslationUnit::instance().getClassDef(sizeofArgTypeDesc->className) == NULL)
+            return false;  // error msg already emitted by checkForSizeOfUnknownStruct()
+
+        size = TranslationUnit::instance().getTypeSize(*sizeofArgTypeDesc);
         return true;
     }
 

@@ -1,4 +1,4 @@
-/*  $Id: SwitchStmt.cpp,v 1.15 2019/01/18 02:42:20 sarrazip Exp $
+/*  $Id: SwitchStmt.cpp,v 1.16 2020/05/07 01:04:08 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2017 Pierre Sarrazin <http://sarrazip.com/>
@@ -336,7 +336,7 @@ SwitchStmt::emitCode(ASMText &out, bool lValue) const
             out.ins("LEAX", tableLabel + ",PCR", "jump table for switch at " + expression->getLineNo());
             const char *routine = expression->isSigned() ? "signedJumpTableSwitch" : "unsignedJumpTableSwitch";
             out.emitImport(routine);
-            TranslationUnit::instance().registerNeededUtility(routine);  // for monolith mode
+            TranslationUnit::instance().registerNeededUtility(routine);
             out.ins("LBRA", routine);
 
             // Pre-table data: minimum and maximum case value, default label offset.

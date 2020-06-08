@@ -1,4 +1,4 @@
-/*  $Id: TypeManager.cpp,v 1.50 2019/08/01 02:14:38 sarrazip Exp $
+/*  $Id: TypeManager.cpp,v 1.54 2020/04/05 02:57:21 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -22,11 +22,14 @@
 #include "util.h"
 #include "Declarator.h"
 #include "WordConstantExpr.h"
-#include "ExpressionTypeSetter.h"
 #include "ClassDef.h"
 #include "Scope.h"
 #include "Declarator.h"
 #include "FunctionDef.h"
+#include "IdentifierExpr.h"
+#include "VariableExpr.h"
+#include "Declaration.h"
+#include "TranslationUnit.h"
 
 using namespace std;
 
@@ -638,6 +641,7 @@ TypeManager::findEnumerator(const string &enumeratorName) const
 bool
 TypeManager::declareEnumerator(Enumerator *enumerator)
 {
+    //cout << "# TypeManager::declareEnumerator: enumerator " << enumerator << ": " << enumerator->name << endl;
     assert(enumerator);
 
     Enumerator *existingEnumerator = findEnumerator(enumerator->name);
@@ -716,42 +720,6 @@ TypeManager::isIdentiferMemberOfNamedEnum(const std::string &enumTypeName, const
         return false;  // unknown enum
     const NamedEnum &namedEnum = it->second;
     return find(namedEnum.members.begin(), namedEnum.members.end(), id) != namedEnum.members.end();
-}
-
-
-void
-TypeManager::setEnumeratorTypes() const
-{
-    //for (EnumTypeNameMap::const_iterator it = enumTypeNames.begin(); it != enumTypeNames.end(); ++it)
-    //    cout << "# NamedEnum " << it->first << " defined at " << it->second.sourceLineNo << "\n";
-
-    //for (size_t i = 0; i < enumerators.size(); ++i)
-    //    cout << "# Enumerator " << enumerators[i].first << ": valueExpr=" << enumerators[i].second->valueExpr << "\n";
-
-    ExpressionTypeSetter ets;
-
-    // With this, the iterate() call below will issue an error message if an enumerator
-    // is defined from an unknown enumerator name (e.g., enum { B = A }).
-    // Such an unknown name will be typed as an 'int'.
-    //
-    ets.enableUnknownEnumeratorDetection();
-
-    for (size_t i = 0; i < enumerators.size(); ++i)
-    {
-        const Enumerator *enumerator = enumerators[i].second;
-        assert(enumerator);
-        //cout << "# Processing enumerator " << enumerators[i].first << ": valueExpr=" << enumerator->valueExpr << "\n";
-
-        if (enumerator->valueExpr)
-        {
-            //cout << "#     type before: " << *enumerator->valueExpr->getTypeDesc() << "\n";
-
-            enumerator->valueExpr->iterate(ets);
-
-            //cout << "#     type after : " << *enumerator->valueExpr->getTypeDesc() << "\n";
-            assert(enumerator->valueExpr->getType() != VOID_TYPE);
-        }
-    }
 }
 
 

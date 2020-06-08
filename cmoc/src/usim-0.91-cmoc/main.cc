@@ -13,7 +13,7 @@
 #include <unistd.h>
 #endif
 
-#if defined(__CYGWIN__) || defined(EMSCRIPTEN)
+#if defined(__CYGWIN__)
 #include <sys/select.h>
 #endif
 
@@ -60,7 +60,7 @@ private:
 static Byte
 getcharifavail()
 {
-	#if defined(__MINGW32__)
+	#if defined(__MINGW32__) || defined(EMSCRIPTEN)
 	return 0;  // not implemented: need to #include the right header file to define select(2)
 	#else
 	fd_set readset;

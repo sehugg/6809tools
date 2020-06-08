@@ -1,4 +1,4 @@
-/*  $Id: Declarator.cpp,v 1.37 2019/08/01 02:14:38 sarrazip Exp $
+/*  $Id: Declarator.cpp,v 1.38 2020/04/04 17:41:44 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -133,9 +133,8 @@ Declarator::declareVariable(const TypeDesc *varType, bool isStatic, bool isExter
     // Create a Declaration object but only initialize it partially.
     // In particular, the size of an array might be specified by enum names,
     // but during parsing, enums have not been fully processed yet.
-    // That will be done later by TypeManager::setEnumeratorTypes().
-    // Right after, the DeclarationFinisher will finish initializing
-    // the Declaration object.
+    // That will be done later by the DeclarationFinisher, which will finish
+    // initializing the Declaration object.
     // 
     Declaration *decl = new Declaration(id, varType, arraySizeExprList, isStatic, isExtern);
 

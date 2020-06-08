@@ -50,17 +50,17 @@ qsort_partition(char *array, size_t elemSize, qsort_compare comparator, size_t l
     for (size_t j = l; j < h; ++j)
     { 
         char *y = array + j * elemSize;
-        int res = comparator(y, x); //FIXME
+        int res = comparator(y, x);
         //printf("P:   J=%u Y=%p X=%p -> RES=%d\n", j, y, x, res);
         if (res <= 0)
         { 
             ++i;
-            //printf("P:     I=%u Y=%p\n", i, y); //FIXME
+            //printf("P:     I=%u Y=%p\n", i, y);
             qsort_swap(array + i * elemSize, y, elemSize); 
         } 
     }
 
-    //printf("P: END: I=%u H=%p\n", i, h); //FIXME
+    //printf("P: END: I=%u H=%p\n", i, h);
     qsort_swap(array + (i + 1) * elemSize, array + h * elemSize, elemSize); 
     return i + 1; 
 }

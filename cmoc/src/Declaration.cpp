@@ -1,4 +1,4 @@
-/*  $Id: Declaration.cpp,v 1.100 2019/10/12 22:47:11 sarrazip Exp $
+/*  $Id: Declaration.cpp,v 1.104 2020/04/30 01:17:55 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
@@ -32,6 +32,7 @@
 #include "RealConstantExpr.h"
 #include "FunctionCallExpr.h"
 #include "IdentifierExpr.h"
+#include "BinaryOpExpr.h"
 
 #include <assert.h>
 
@@ -532,11 +533,7 @@ Declaration::emitStaticValues(ASMText &out, Tree *arrayElementInitializer, const
         if (requiredTypeDesc->type == CLASS_TYPE)
         {
             const ClassDef *cl = TranslationUnit::instance().getClassDef(requiredTypeDesc->className);
-            assert(cl);
-            if (cl->getNumDataMembers() != seq->size())
-            {
-                warnmsg("wrong number of initializers for struct %s", cl->getClassName().c_str());
-            }
+            assert(cl && cl->getType() == CLASS_TYPE);
 
             size_t memberIndex = 0;
             for (vector<Tree *>::const_iterator it = seq->begin(); it != seq->end(); ++it, ++memberIndex)
@@ -667,11 +664,7 @@ Declaration::emitSequenceInitCode(ASMText &out, const Tree *initializer, const T
             // 'seq' must contain one element for each member of the struct to initialize.
             //
             const ClassDef *cl = TranslationUnit::instance().getClassDef(requiredTypeDesc->className);
-            assert(cl);
-            if (cl->getNumDataMembers() != seq->size())
-            {
-                warnmsg("wrong number of initializers for struct %s", requiredTypeDesc->className.c_str());
-            }
+            assert(cl && cl->getType() == CLASS_TYPE);
 
             size_t memberIndex = 0;
             for (vector<Tree *>::const_iterator it = seq->begin(); it != seq->end(); ++it, ++memberIndex)
@@ -841,6 +834,134 @@ Declaration::emitSequenceInitCode(ASMText &out, const Tree *initializer, const T
 }
 
 
+// Returns true iff tree if name[...][...][...]...
+//
+static bool
+isMatrixElementReferenceOnArrayName(const Tree &tree)
+{
+    const BinaryOpExpr *bin = dynamic_cast<const BinaryOpExpr *>(&tree);
+    if (!bin)
+        return false;
+    if (bin->getOperator() != BinaryOpExpr::ARRAY_REF)
+        return false;
+    if (bin->getLeft()->asVariableExpr())
+        return true;  // left side is name
+    return isMatrixElementReferenceOnArrayName(*bin->getLeft());  // recurse
+}
+
+
+// Returns true iff all expressions in name[...][...][...] are constant.
+// Must only be called on trees on which isMatrixElementReferenceOnArrayName() returns true.
+//
+static bool
+isConstantExprArrayRefChain(const Tree &tree)
+{
+    const BinaryOpExpr *bin = dynamic_cast<const BinaryOpExpr *>(&tree);
+    assert(bin && bin->getOperator() == BinaryOpExpr::ARRAY_REF);
+
+    // Check that bracket expression is constant.
+    uint16_t value;
+    if (!bin->getRight()->evaluateConstantExpr(value))
+        return false;
+    
+    if (bin->getLeft()->asVariableExpr())
+        return true;
+
+    return isConstantExprArrayRefChain(*bin->getLeft());
+}
+
+
+static bool
+isAddressOfVariable(const Tree &tree)
+{
+    const UnaryOpExpr *u = dynamic_cast<const UnaryOpExpr *>(&tree);
+    if (!u || u->getOperator() != UnaryOpExpr::ADDRESS_OF)
+        return u;
+    const Tree *subExpr = u->getSubExpr();
+    if (subExpr->asVariableExpr() != NULL)
+        return true;
+    
+    if (isMatrixElementReferenceOnArrayName(*subExpr))
+        return isConstantExprArrayRefChain(*subExpr);
+
+    return false;
+}
+
+
+// Returns true if 'tree' only contains variables, constant expressions
+// and arithmetic operators.
+// numVariables and numConstantExpressions must be initialized.
+//
+static bool
+countVariablesAndConstantExpressions(const Tree &tree, size_t &numVariables, size_t &numConstantExpressions)
+{
+    assert(&tree);
+    uint16_t value;
+    if (tree.asVariableExpr())
+        ++numVariables;
+    else if (tree.evaluateConstantExpr(value))
+        ++numConstantExpressions;
+    else if (const BinaryOpExpr *bin = dynamic_cast<const BinaryOpExpr *>(&tree))
+    {
+        switch (bin->getOperator())
+        {
+            case BinaryOpExpr::ADD:
+            case BinaryOpExpr::SUB:
+            case BinaryOpExpr::MUL:
+            case BinaryOpExpr::DIV:
+            case BinaryOpExpr::MOD:
+                if (!countVariablesAndConstantExpressions(*bin->getLeft(), numVariables, numConstantExpressions))
+                    return false;
+                if (!countVariablesAndConstantExpressions(*bin->getRight(), numVariables, numConstantExpressions))
+                    return false;
+                break;
+            default:
+                return false;  // unexpected operator
+        }
+    }
+    else
+        return false;  // unexpected expression type
+    return true;
+}
+
+
+static bool
+isConstantInitializer(const Tree &initExpr)
+{
+    if (initExpr.isNumericalLiteral())  // includes longs, floats and doubles
+        return true;
+    uint16_t value;
+    if (initExpr.evaluateConstantExpr(value))
+        return true;
+    if (dynamic_cast<const StringLiteralExpr *>(&initExpr))
+        return true;
+    if (isAddressOfVariable(initExpr))
+        return true;
+    if (dynamic_cast<const IdentifierExpr *>(&initExpr))
+    {
+        if (initExpr.getTypeDesc()->isPtrToFunction())  // address of function by ID
+            return true;
+        if (initExpr.getType() == ARRAY_TYPE)  // name of an array
+            return true;
+    }
+    const TreeSequence *seq = dynamic_cast<const TreeSequence *>(&initExpr);
+    if (seq)
+    {
+        for (vector<Tree *>::const_iterator it = seq->begin(); it != seq->end(); ++it)
+            if (!isConstantInitializer(**it))
+                return false;
+        return true;
+    }
+    if (const BinaryOpExpr *bin = dynamic_cast<const BinaryOpExpr *>(&initExpr))
+    {
+        size_t numVariables = 0, numConstantExpressions = 0;
+        return countVariablesAndConstantExpressions(*bin, numVariables, numConstantExpressions)
+                && numVariables == 1;
+    }
+    return false;
+}
+
+
 /*virtual*/
 void
 Declaration::checkSemantics(Functor &f)
@@ -860,13 +981,18 @@ Declaration::checkSemantics(Functor &f)
         ScopeCreator sc(translationUnit, &translationUnit.getGlobalScope());
         iterate(sc);
 
-        // Also set the expression type in the initializer. For local declarations,
-        // this is done when the semantics checker is called on the function definition.
-        //
         if (initializationExpr != NULL)
         {
+            // Also set the expression type in the initializer. For local declarations,
+            // this is done when the semantics checker is called on the function definition.
+            //
             ExpressionTypeSetter ets;
             initializationExpr->iterate(ets);
+
+            // Check that the initializer is constant, i.e., does not require run-time code.
+            //
+            if (!isConstantInitializer(*initializationExpr))
+                errormsg("initializer element is not constant");
         }
     }
     else if (isStatic)

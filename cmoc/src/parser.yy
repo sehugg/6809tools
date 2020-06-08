@@ -1,5 +1,5 @@
 %{
-/*  $Id: parser.yy,v 1.82 2019/06/22 03:35:45 sarrazip Exp $
+/*  $Id: parser.yy,v 1.83 2020/02/10 01:58:22 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -367,6 +367,7 @@ struct_or_union_specifier:
                         TranslationUnit::instance().getGlobalScope().declareClass(classDef);
                         const TypeDesc *td = TranslationUnit::getTypeManager().getClassType($2, $1 == UNION, true);
                         assert(td);
+                        classDef->setTypeDesc(td);
                         $$ = td;
                         free($2);
                     }
@@ -380,6 +381,7 @@ struct_or_union_specifier:
                         TranslationUnit::instance().getGlobalScope().declareClass(classDef);
                         const TypeDesc *td = TranslationUnit::getTypeManager().getClassType(anonStructName, $1 == UNION, true);
                         assert(td);
+                        classDef->setTypeDesc(td);
                         $$ = td;
                     }
 

@@ -1,5 +1,6 @@
 #include <coco.h>
 
+#define PROGRAM "check-long.c"
 
 typedef unsigned long ulong;
 
@@ -9,7 +10,7 @@ word numAsserts = 0, numErrors = 0;
 #define assert(cond) do { ++numAsserts; \
                           /*printf("TEST AT LINE %u\n", __LINE__);*/ \
                           if (!(cond)) { \
-                            printf("*** ERROR: ASSERT FAILED: LINE %d\n", __LINE__); \
+                            printf(PROGRAM ": ERROR: ASSERT FAILED: LINE %d\n", __LINE__); \
                             ++numErrors; \
                             exit(1); \
                             } \
@@ -1205,8 +1206,8 @@ int main()
     #endif
 
     if (numErrors == 0)
-        printf("SUCCESS (%u ASSERTS PASSED).\n", numAsserts);
+        printf(PROGRAM ": SUCCESS (%u ASSERTS PASSED).\n", numAsserts);
     else
-        printf("FAILURE: %u ERROR(S) OUT OF %u ASSERTS.\n", numErrors, numAsserts);
+        printf(PROGRAM ": FAILURE: %u ERROR(S) OUT OF %u ASSERTS.\n", numErrors, numAsserts);
     return 0;
 }

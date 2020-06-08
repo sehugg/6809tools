@@ -1,4 +1,4 @@
-/*  $Id: VariableExpr.cpp,v 1.15 2017/12/17 06:51:09 sarrazip Exp $
+/*  $Id: VariableExpr.cpp,v 1.16 2020/02/09 17:48:55 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -105,8 +105,8 @@ VariableExpr::checkSemantics(Functor &f)
     const FunctionDef *curFD = sem.getCurrentFunctionDef();
     if (!curFD)
         curFD = tu.getFunctionDef("main");
-    assert(curFD);
-    tu.registerFunctionCall(curFD->getId(), id);
+    if (curFD)
+        tu.registerFunctionCall(curFD->getId(), id);
 }
 
 

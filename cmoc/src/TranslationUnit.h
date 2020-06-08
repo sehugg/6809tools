@@ -1,4 +1,4 @@
-/*  $Id: TranslationUnit.h,v 1.56 2019/10/19 03:26:48 sarrazip Exp $
+/*  $Id: TranslationUnit.h,v 1.63 2020/05/07 01:04:08 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
@@ -51,6 +51,7 @@ public:
                                bool warnPassingConstForFuncPtr,
                                bool isConstIncorrectWarningEnabled,
                                bool isBinaryOpGivingByteWarningEnabled,
+                               bool isLocalVariableHidingAnotherWarningEnabled,
                                bool relocatabilitySupported);
 
     static void destroyInstance();
@@ -81,7 +82,7 @@ public:
     // See detectCalledFunctions().
     void registerFunctionCall(const std::string &callerId, const std::string &calleeId);
 
-    void checkSemantics(bool monolithMode);
+    void checkSemantics();
 
     void setTargetPlatform(TargetPlatform platform);
 
@@ -101,10 +102,7 @@ public:
     void allocateLocalVariables();
 
     // allocateLocalVariables() must have been called.
-    void emitAssembler(ASMText &out, const std::string &programName, bool compileOnly,
-                       uint16_t codeAddress, uint16_t dataAddress, uint16_t stackSpace,
-                       bool emitBootLoaderMarker, bool emitUncalledFunctions,
-                       bool monolithMode);
+    void emitAssembler(ASMText &out, uint16_t dataAddress, uint16_t stackSpace, bool emitBootLoaderMarker);
 
     void pushScope(Scope *scope);
     Scope *getCurrentScope();
@@ -142,6 +140,8 @@ public:
 
     const ClassDef *getClassDef(const std::string &className) const;
 
+    ClassDef *getClassDef(const std::string &className);
+
     // See Tree::callUtility().
     void registerNeededUtility(const std::string &utilitySubRoutine);
 
@@ -153,7 +153,7 @@ public:
                         uint16_t &codeLimitAddress, bool codeLimitAddressSetBySwitch,
                         uint16_t &dataAddress, bool dataAddressSetBySwitch,
                         uint16_t &stackSpace,
-                        bool monolithMode, bool compileOnly);
+                        bool compileOnly);
 
     /** Determines if accesses to pointers will include a run-time null pointer check.
     */
@@ -170,15 +170,6 @@ public:
     /** Indicates if stack overflows are checked for at the beginning of a function.
     */
     bool isStackOverflowCheckingEnabled() const;
-
-    // If the function body of 'functionId' is provided by the standard library, register the name as
-    // a needed utility sub-routine, and also register any other needed routine.
-    //
-    void checkForNeededUtility(const std::string &functionId);
-
-    // Determines if the definition of the named function is provided by the standard library or not.
-    //
-    bool isStandardFunction(const std::string &functionId) const;
 
     DeclarationSequence *createDeclarationSequence(DeclarationSpecifierList *dsl,
                                                    std::vector<Declarator *> *declarators);
@@ -197,6 +188,8 @@ public:
 
     bool warnOnBinaryOpGivingByte() const;
 
+    bool warnOnLocalVariableHidingAnother() const;
+
     void warnAboutVolatile();
 
     // Adds the given filename to the list of filenames that the current
@@ -212,6 +205,11 @@ public:
                             const std::string &objectFilename,
                             const std::string &pkgdatadir) const;
 
+    // Adds decl to globalVariables if not extern.
+    // Declares decl in globalScope.
+    //
+    void declareGlobal(Declaration *decl);
+
 private:
 
     TranslationUnit(TargetPlatform targetPlatform,
@@ -220,14 +218,19 @@ private:
                     bool _warnPassingConstForFuncPtr,
                     bool _isConstIncorrectWarningEnabled,
                     bool _isBinaryOpGivingByteWarningEnabled,
+                    bool _isLocalVariableHidingAnotherWarningEnabled,
                     bool _relocatabilitySupported);
 
     void detectCalledFunctions();
     static std::string resolveVectrexMusicAddress(const std::string &symbol);
     void emitProgramEnd(ASMText &out) const;
-    CodeStatus emitWritableGlobals(ASMText &out, bool monolithMode) const;
+    CodeStatus emitWritableGlobals(ASMText &out) const;
     CodeStatus emitGlobalVariables(ASMText &out, bool readOnlySection, bool withStaticInitializer) const;
     void checkConstDataDeclarationInitializer(const Declaration &decl) const;
+    void markGlobalDeclarations();
+    void setTypeDescOfGlobalDeclarationClasses();
+    void setGlobalDeclarationLabels();
+    void declareFunctions();
 
     struct StandardFunctionDeclaration
     {
@@ -236,8 +239,6 @@ private:
         const char *name;  // C name of the function (e.g., "sprintf")
         const char *required[MAXREQS];  // C names of the functions needed by 'name'() (e.g., "printf", when name is "sprintf")
     };
-
-    static const StandardFunctionDeclaration stdLibTable[];
 
 private:
 
@@ -282,6 +283,7 @@ private:
     bool warnedAboutUnsupportedFloats;
     bool isConstIncorrectWarningEnabled;
     bool isBinaryOpGivingByteWarningEnabled;
+    bool isLocalVariableHidingAnotherWarningEnabled;
     bool warnedAboutVolatile;
     std::set<std::string> neededUtilitySubRoutines;
     TargetPlatform targetPlatform;

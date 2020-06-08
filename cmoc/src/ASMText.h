@@ -1,4 +1,4 @@
-/*  $Id: ASMText.h,v 1.66 2019/10/09 01:42:01 sarrazip Exp $
+/*  $Id: ASMText.h,v 1.68 2020/05/13 23:23:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
@@ -31,7 +31,7 @@
 // Internal representation of the assembly language program.
 // The ins() and "emit" methods accumulate elements in memory,
 // then the writeFile() method writes the assembly to a text file.
-// Before calling writeFile(), optimizations could be made.
+// Before calling writeFile(), optimizations can be made.
 //
 class ASMText
 {
@@ -61,7 +61,7 @@ public:
     // Does not close 'out'.
     // Returns out.good().
     //
-    bool writeFile(std::ostream &out, bool monolithMode);
+    bool writeFile(std::ostream &out);
 
     // ins: Comparison is case-insensitive. Long branches are also recognized.
     //      BRA and BRN are not considered to be conditional branches.
@@ -110,13 +110,13 @@ private:
     void addElement(Type type, const std::string &field0 = "", const std::string &field1 = "", const std::string &field2 = "");
 
     // Actual assembly writing methods:
-    void writeElement(std::ostream &out, const Element &e, bool monolithMode);
+    void writeElement(std::ostream &out, const Element &e);
     void writeIns(std::ostream &out, const Element &e);
     void writeLabel(std::ostream &out, const Element &e);
     void writeInlineAssembly(std::ostream &out, const Element &e);
     void writeComment(std::ostream &out, const Element &e);
     void writeSeparatorComment(std::ostream &out, const Element &e);
-    void writeInclude(std::ostream &out, const Element &e, bool monolithMode);
+    void writeInclude(std::ostream &out, const Element &e);
 
     // Optimization names:
     bool branchToNextLocation(size_t index);
@@ -189,6 +189,7 @@ private:
     bool removeUselessTfr2(size_t index);
     bool removeUselessClrb(size_t index);
     bool optimizeDXAliases(size_t index);
+    bool removeLoadInComparisonWithTwoValues(size_t index);
 
     // Whole-function optimizer:
     bool isBasicBlockEndingInstruction(const Element &e) const;

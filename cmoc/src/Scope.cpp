@@ -1,4 +1,4 @@
-/*  $Id: Scope.cpp,v 1.14 2019/08/16 02:32:44 sarrazip Exp $
+/*  $Id: Scope.cpp,v 1.16 2020/05/06 02:40:26 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -30,11 +30,12 @@
 using namespace std;
 
 
-Scope::Scope(Scope *_parent)
+Scope::Scope(Scope *_parent, const string &_startLineNo)
   : parent(_parent),
     subScopes(),
     declTable(),
-    classTable()
+    classTable(),
+    startLineNo(_startLineNo)
 {
     if (parent != NULL)
         parent->addSubScope(this);
@@ -156,7 +157,7 @@ Scope::declareVariable(Declaration *d)
     /*cout << "# Scope::declareVariable: [" << this << "] id='" << id << "' -> d=" << d
             << ", {" << d->getTypeDesc()->toString()
             << "}, isExtern=" << d->isExtern << ", lineno=" << (d ? d->getLineNo() : "")
-            << ", found=" << found << endl;*/
+            << ", found=" << found << ", scope start: " << startLineNo << endl;*/
     if (found != NULL)  // if already declared in this scope
     {
         if (found->getTypeDesc() != d->getTypeDesc())
@@ -175,6 +176,17 @@ Scope::declareVariable(Declaration *d)
         // Accept two identical extern declarations.
         return found->isExtern && d->isExtern;
     }
+
+    // Optionally warn if the declared variable is local and hides another local variable.
+    //
+    if (TranslationUnit::instance().warnOnLocalVariableHidingAnother())
+    {
+        found = getVariableDeclaration(id, true);  // look in ancestor Scopes
+        if (found != NULL && ! found->isGlobal())
+            d->warnmsg("Local variable `%s' hides local variable `%s' declared at %s",
+                        id.c_str(), found->getVariableId().c_str(), found->getLineNo().c_str());
+    }
+
     declTable.push_back(make_pair(id, d));
     return true;
 }

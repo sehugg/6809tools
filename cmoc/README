@@ -1,4 +1,4 @@
-CMOC - A C-like 6809-targeting cross-compiler
+CMOC - A 6809-generating cross-compiler for a subset of the C language
 
 Home page: http://sarrazip.com/dev/cmoc.html
 
@@ -9,9 +9,8 @@ License
 
 Installation
 
-    See the file INSTALL. If using the FrankASM 6809 assembler
-    (as6809), it should already have been installed. CMOC can also
-    use LWTOOLS' lwasm. See the home page for details.
+    See the file INSTALL. CMOC requires LWTOOLS and works under a
+    Unix-like operating system. See the home page for details.
 
 Automake
 
@@ -25,3 +24,16 @@ Documentation
     in the top source directory will generate doc/cmoc-manual.html,
     which will include a table of contents.
 
+    A description of the implementation is also available in
+    doc/cmoc-implementation.markdown.
+
+Emscripten Support
+~~~
+CXXFLAGS = -g -O2 -W -Wall \
+                -s MODULARIZE=1 \
+                -s ALLOW_MEMORY_GROWTH=1 \
+                -s EXPORT_NAME=\"'cmoc'\" \
+                -s 'EXTRA_EXPORTED_RUNTIME_METHODS=["FS","callMain"]' \
+                -s FORCE_FILESYSTEM=1 \
+                -s DISABLE_EXCEPTION_CATCHING=0
+~~~

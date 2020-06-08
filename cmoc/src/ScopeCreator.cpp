@@ -1,4 +1,4 @@
-/*  $Id: ScopeCreator.cpp,v 1.18 2017/12/24 02:41:30 sarrazip Exp $
+/*  $Id: ScopeCreator.cpp,v 1.20 2020/04/05 02:57:21 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -82,7 +82,7 @@ ScopeCreator::privateOpen(Tree *t)
         || dynamic_cast<ForStmt *>(t)
         || dynamic_cast<WhileStmt *>(t))
     {
-        Scope *s = new Scope(cs);
+        Scope *s = new Scope(cs, t->getLineNo());
         assert(s->getParent() == cs);
         //cout << "# ScopeCreator::privateOpen:   creating scope " << s << " at " << t->getLineNo() << endl;
 
@@ -185,8 +185,6 @@ ScopeCreator::close(Tree *t)
 // set by the ExpressionTypeSetter (look for the IdentifierExpr case).
 // (This method is intended to be called when it would be too
 // soon to set the type of an enumerated name's initialization expression.)
-//
-// This should be the only place that creates a VariableExpr object.
 //
 void
 ScopeCreator::processIdentifierExpr(IdentifierExpr &ie)

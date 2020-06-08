@@ -1,4 +1,4 @@
-# $Id: Makefile.am,v 1.6 2018/10/28 13:42:42 sarrazip Exp $
+# $Id: Makefile.am,v 1.7 2020/06/06 04:41:44 sarrazip Exp $
 
 cmoclibdir = $(pkgdatadir)/lib
 cmoclib_DATA = \
@@ -89,6 +89,14 @@ CMOC_LIB_FLAGS = -O2 -DNDEBUG -nostdinc -I $(srcdir)/../stdlib -I $(srcdir)
 
 .c.ecb_o:
 	../cmoc -c $(CMOC_LIB_FLAGS) -o $@ $<
+
+# Checks if some files contain non-breakable spaces (character 160).
+# The statement in the 'continue' clause resets the line counter ($.)
+# at the end of each processed file.
+#
+check:
+	$(PERL) -e 'while (<>) { if (/\xA0/) { print "ERROR: non-breakable space at $$ARGV:$$.\n"; exit 1 } } continue { close ARGV if eof }' \
+		$(ASM) $(C_COCO_BASIC) Makefile.am
 
 CLEANFILES = $(cmoclib_DATA) $(ECB_OBJ) $(ECB_OBJ:.ecb_o=.s) $(ECB_OBJ:.ecb_o=.lst)
 

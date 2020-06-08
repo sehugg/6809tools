@@ -1,4 +1,4 @@
-/*  $Id: util.h,v 1.40 2019/08/01 02:14:39 sarrazip Exp $
+/*  $Id: util.h,v 1.43 2020/06/06 04:41:43 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -253,7 +253,7 @@ inline bool isAssemblyIdentifierChar(char c)
 }
 
 
-// Advances 'index' until s[index] is not a space character or 'index' is the length of 's'.
+// Advances 'index' until s[index] is not a space character or 'index' is the length of 's'.
 // Does nothing if 'index' is already at or beyond the length of 's'.
 //
 inline void passSpaces(const std::string &s, size_t &index)
@@ -263,7 +263,7 @@ inline void passSpaces(const std::string &s, size_t &index)
 }
 
 
-// Advances 'index' until s[index] is a space character or 'index' is the length of 's'.
+// Advances 'index' until s[index] is a space character or 'index' is the length of 's'.
 // Does nothing if 'index' is already at or beyond the length of 's'.
 //
 inline void passNonSpaces(const std::string &s, size_t &index)
@@ -290,6 +290,11 @@ std::string removeExtension(std::string &s);
 // newExt: Must start with period, if a period is wanted in the new extension.
 //
 std::string replaceExtension(const std::string &s, const char *newExt);
+
+// Replaces the part of 's' that precedes the last directory separator with 'newDir'.
+// If no directory separator is found, returns newDir + "/" + s.
+//
+std::string replaceDir(const std::string &s, const std::string &newDir);
 
 std::string getBasename(const std::string &filename);
 
@@ -337,7 +342,7 @@ public:
 };
 
 
-// Manipulator to print vectors: e.g., with vector<T> v, do cout << v;
+// Manipulator to print vectors: e.g., with vector<T> v, do cout << vectorToString(v);
 //
 template <typename T>
 inline VectorToString<T>

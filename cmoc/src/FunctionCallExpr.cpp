@@ -1,4 +1,4 @@
-/*  $Id: FunctionCallExpr.cpp,v 1.81 2019/10/12 22:47:12 sarrazip Exp $
+/*  $Id: FunctionCallExpr.cpp,v 1.84 2020/05/07 01:04:08 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -42,8 +42,7 @@ FunctionCallExpr::FunctionCallExpr(Tree *func, TreeSequence *args)
     function(func),
     funcPtrVarDecl(NULL),
     arguments(args),
-    returnValueDeclaration(NULL),
-    monolithMode(false)
+    returnValueDeclaration(NULL)
 {
     assert(function != NULL);
     assert(arguments != NULL);
@@ -529,7 +528,6 @@ FunctionCallExpr::checkSemantics(Functor &f)
     {
         // Register this function call for the purposes of determining which functions
         // are never called and do not need to have assembly code emitted for them.
-        // (The preceding applies to monolith mode only.)
         // When there is no calling function (as in a global variable's initialization
         // expression), we do as if main() were the caller. This is not actually the
         // case, because the caller is the INITGL routine, but it is close enough for
@@ -845,21 +843,6 @@ FunctionCallExpr::emitCode(ASMText &out, bool lValue) const
                             + (functionId.empty() ? " through pointer" : ": " + functionId + "()"));
 
     TranslationUnit &tu = TranslationUnit::instance();
-
-    /*  Special cases: functions that are defined in the standard library.
-    */
-    if (monolithMode && !functionId.empty())  // if standard call (i.e., not made through pointer)
-    {
-        const FunctionDef *fd = tu.getFunctionDef(functionId);
-        if (fd == NULL || fd->getBody() == NULL)  // if not declared or does not have a body
-        {
-            // If the function body is provided by the standard library, register the name as
-            // a needed utility sub-routine.
-            //
-            tu.checkForNeededUtility(functionId);
-        }
-    }
-
 
     uint16_t numBytesPushed = 0;
 

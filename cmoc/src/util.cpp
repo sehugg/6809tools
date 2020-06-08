@@ -1,7 +1,7 @@
-/*  $Id: util.cpp,v 1.38 2019/07/27 03:20:33 sarrazip Exp $
+/*  $Id: util.cpp,v 1.40 2020/03/02 01:42:19 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2020 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -320,6 +320,17 @@ replaceExtension(const string &s, const char *newExt)
     string result = s;
     (void) removeExtension(result);
     return result + newExt;
+}
+
+
+string
+replaceDir(const string &s, const string &newDir)
+{
+    string prefix = newDir + "/";
+    string::size_type lastDirSepPos = s.rfind('/');
+    if (lastDirSepPos != string::npos)  // if dir sep found
+        return prefix + s.substr(lastDirSepPos + 1);
+    return prefix + s;
 }
 
 

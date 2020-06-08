@@ -1,4 +1,4 @@
-/*  $Id: ExpressionTypeSetter.h,v 1.4 2017/07/22 15:36:10 sarrazip Exp $
+/*  $Id: ExpressionTypeSetter.h,v 1.5 2020/04/04 17:41:44 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -31,16 +31,12 @@ public:
     ExpressionTypeSetter();
     virtual ~ExpressionTypeSetter();
 
-    void enableUnknownEnumeratorDetection() { unknownEnumeratorDetectionEnabled = true; }
-
     virtual bool close(Tree *t);
 
 private:
     bool processBinOp(BinaryOpExpr *bin);
     bool checkForUnaryOnClass(const Tree &subExpr, UnaryOpExpr::Op op) const;
     bool processUnaryOp(UnaryOpExpr *un);
-
-    bool unknownEnumeratorDetectionEnabled;  // if true, error message when undefined enumerator name is seen
 };
 
 
